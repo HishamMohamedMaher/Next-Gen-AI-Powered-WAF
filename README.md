@@ -55,37 +55,94 @@ docker compose --profile full up -d
 
 ```
 ai-waf/
-├── config.yaml                  # Core configuration file
-├── docker-compose.yml           # Multi-container orchestration
-├── Dockerfile.waf               # WAF gateway image
+├── docker-compose.yml           # Multi-container orchestration (WAF, Juice Shop, Dashboard)
+├── Dockerfile.waf               # WAF gateway production image
 ├── Dockerfile.dashboard         # Streamlit dashboard image
 ├── requirements.txt             # WAF runtime dependencies
 ├── requirements-dashboard.txt   # Dashboard dependencies
-├── requirements-training.txt    # ML training dependencies
+├── requirements-training.txt    # ML training & evaluation dependencies
+├── config.yaml                  # Core WAF configuration & thresholds
 ├── .env.example                 # Environment variables template
-├── .gitignore                   # Git ignore patterns
+├── .gitignore                   # Git ignore rules
 ├── README.md                    # Project documentation
-├── rules/                       # Detection signatures and rules
-├── trained_models/              # Serialized ML models and checksums
+│
+├── waf/                         # WAF Core Engine
+│   ├── __init__.py
+│   ├── main.py                  # FastAPI ASGI entrypoint & lifespan lifecycle
+│   ├── proxy.py                 # Async reverse proxy & backend forwarder
+│   ├── context.py               # RequestContext builder & body parser
+│   ├── normalizer.py            # Iterative multi-layer URL/HTML/Unicode normalizer
+│   ├── config_manager.py        # YAML configuration loader & hot-reload
+│   ├── models.py                # Core dataclasses (RequestContext, DetectionResult, etc.)
+│   ├── signatures.py            # Deterministic regex signature engine with ReDoS guard
+│   ├── feature_extractor.py     # Structural feature extractor & entropy calculator
+│   ├── ai_engine.py             # Model loader, predictor, calibrator & warm-up
+│   ├── detector.py              # Central decision orchestrator & fail-open pipeline
+│   ├── rate_limiter.py          # In-memory Token Bucket rate limiter
+│   ├── threat_intel.py          # AbuseIPDB API client with SQLite cache
+│   ├── blacklist.py             # In-memory dynamic IP blacklist & strike tracker
+│   ├── geoip.py                 # MaxMind / DB-IP GeoIP enrichment
+│   ├── event_queue.py           # Async non-blocking queue & background batch writer
+│   ├── db.py                    # SQLite telemetry database manager (WAL mode)
+│   └── alerts.py                # Alert generation & dedup engine
+│
+├── dashboard/                   # Streamlit SOC Dashboard
+│   ├── __init__.py
+│   ├── app.py                   # Main dashboard landing page
+│   ├── db_reader.py             # Read-only SQLite query interface
+│   └── pages/
+│       ├── 1_overview.py        # Real-time traffic metrics & Plotly attack charts
+│       └── 2_alerts.py          # Security alerts viewer & incident acknowledgment
+│
+├── rules/                       # Detection Signatures
+│   └── rules.json               # 28 regex attack rules (SQLi, XSS, Traversal, CMDi)
+│
+├── training/                    # ML Training & Offline Pipelines
+│   ├── __init__.py
+│   ├── clean_data.py            # Dataset cleaning, deduplication & signature scan
+│   ├── prepare_features.py      # Feature engineering & stratified train/val/test splits
+│   ├── train_lr.py              # TF-IDF character n-grams + Logistic Regression training
+│   ├── train_lgbm.py            # Structural feature LightGBM training (optional)
+│   ├── calibrate.py             # Probability calibration utilities (isotonic)
+│   ├── evaluate.py              # Evaluation metrics, confusion matrix & reports
+│   └── notebooks/
+│       └── training.ipynb       # Interactive training notebook for Google Colab
+│
+├── tests/                       # Automated Test Suite (pytest)
+│   ├── __init__.py
+│   ├── conftest.py              # Pytest fixtures & async test client
+│   ├── test_proxy.py            # Reverse proxy & body handling tests
+│   ├── test_context.py          # Context builder & parsing tests
+│   ├── test_normalizer.py       # Obfuscation & normalization unit tests
+│   ├── test_signatures.py       # Signature matching & ReDoS protection tests
+│   ├── test_detector.py         # Full detection pipeline integration tests
+│   ├── test_rate_limiter.py     # Token bucket rate limiting tests
+│   ├── test_integration.py      # End-to-end attack blocking tests
+│   └── payloads/                # Attack & benign evaluation payloads
+│       ├── sqli.txt             # 30 SQL injection payloads
+│       ├── xss.txt              # 20 XSS payloads
+│       ├── traversal.txt        # 15 Path traversal payloads
+│       ├── cmdi.txt             # 15 Command injection payloads
+│       └── benign.txt           # 20 Benign real-world requests
+│
+├── scripts/                     # Operational & Benchmark Scripts
+│   ├── generate_baseline.py     # Records legitimate Juice Shop user sessions
+│   ├── benchmark.py             # Latency measurement benchmark (p50/p95/p99)
+│   └── demo.py                  # Automated live presentation attack script
+│
+├── docs/                        # Architecture & Planning Documentation
+│   ├── architecture.md          # Full engineering architecture specification
+│   ├── team_tasks.md            # Team member work breakdown & learning roadmap
+│   ├── evaluation.md            # Survival plan, risk analysis & KPI definitions
+│   ├── threat_model.md          # Formal STRIDE / Attack vector threat model
+│   └── decisions.md             # Architecture Decision Records (ADRs)
+│
+├── trained_models/              # Exported Models & Integrity Checksums
 │   ├── .gitkeep
 │   └── checksums.sha256
-├── data/                        # Persistent logs and telemetry DB
-│   └── .gitkeep
-├── waf/                         # WAF core engine
-│   ├── main.py                  # ASGI application entrypoint
-│   ├── config.py                # Pydantic configuration models
-│   ├── pipeline.py              # Detection pipeline orchestrator
-│   ├── proxy.py                 # Reverse proxy handler
-│   ├── rules/                   # Rule matching engine
-│   ├── ml/                      # ML inference engine
-│   ├── utils/                   # Helpers, rate limiting, IP checking
-│   └── storage/                 # Database logging & telemetry
-├── dashboard/                   # Streamlit analytics application
-│   └── app.py
-├── training/                    # Dataset processing and ML training
-│   ├── prepare_data.py
-│   └── train_lr.py
-└── tests/                       # Unit and integration tests
+│
+└── data/                        # Local Storage (gitignored)
+    └── .gitkeep
 ```
 
 ---
