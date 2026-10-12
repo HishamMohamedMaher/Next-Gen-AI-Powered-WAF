@@ -1,0 +1,28 @@
+# Environment
+.env
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Data
+data/
+*.db
+*.db-wal
+*.db-shm
+
+# Models (large files)
+trained_models/*.pkl
+!trained_models/checksums.sha256
+!trained_models/.gitkeep
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# OS
+Thumbs.db
+Desktop.ini

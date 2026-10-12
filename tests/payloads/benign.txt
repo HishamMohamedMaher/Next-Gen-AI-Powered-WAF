@@ -1,0 +1,20 @@
+apple juice
+Search for products
+user@example.com
+John O'Brien
+100% organic
+Price: $9.99
+Order #12345
+Banana Smoothie (500ml)
+Green Tea & Honey
+hello world!
+contact-support@shop.local
+Customer Feedback: Excellent service!
+Item description with apostrophe: Don't forget milk!
+Query terms: books, electronics & stationery
+Path: /assets/images/logo.png
+{"name": "Alice Smith", "age": 30}
+Page 1 of 50
+Discount code: SUMMER_2026
+Standard delivery (2-3 business days)
+Questions? Visit https://juice-shop.example.org/faq

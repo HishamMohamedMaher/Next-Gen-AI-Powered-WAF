@@ -1,0 +1,53 @@
+version: '3.9'
+
+networks:
+  waf-internal:
+    internal: true
+  waf-external:
+    internal: false
+
+services:
+  juiceshop:
+    image: bkimminich/juice-shop:latest
+    networks:
+      - waf-internal
+    restart: unless-stopped
+    mem_limit: 512m
+
+  waf:
+    build:
+      context: .
+      dockerfile: Dockerfile.waf
+    ports:
+      - '8080:8080'
+    networks:
+      - waf-internal
+      - waf-external
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
+      - ./rules:/app/rules:ro
+      - ./trained_models:/app/trained_models:ro
+      - waf-data:/app/data
+    env_file: .env
+    depends_on:
+      - juiceshop
+    restart: unless-stopped
+    mem_limit: 1g
+
+  dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile.dashboard
+    ports:
+      - '8501:8501'
+    networks:
+      - waf-external
+    volumes:
+      - waf-data:/app/data:ro
+    restart: unless-stopped
+    mem_limit: 512m
+    profiles:
+      - full
+
+volumes:
+  waf-data:

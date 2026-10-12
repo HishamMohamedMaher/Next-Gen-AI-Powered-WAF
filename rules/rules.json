@@ -1,0 +1,285 @@
+{
+  "version": "1.0",
+  "rules": [
+    {
+      "id": "SQLI-001",
+      "category": "sqli",
+      "name": "SQL Tautology OR/AND 1=1 Pattern",
+      "pattern": "(?i)\\b(or|and)\\b\\s+['\"]?\\d+['\"]?\\s*=\\s*['\"]?\\d+",
+      "severity": "high",
+      "paranoia_level": 1,
+      "targets": ["query", "body", "path"],
+      "enabled": true
+    },
+    {
+      "id": "SQLI-002",
+      "category": "sqli",
+      "name": "SQL UNION SELECT Injection",
+      "pattern": "(?i)\\bunion\\s+(?:all\\s+)?select\\b",
+      "severity": "high",
+      "paranoia_level": 1,
+      "targets": ["query", "body", "path"],
+      "enabled": true
+    },
+    {
+      "id": "SQLI-003",
+      "category": "sqli",
+      "name": "SQL Keywords After Quote",
+      "pattern": "(?i)['\"]\\s*(?:or|and|having|group\\s+by|order\\s+by|limit|where)\\b",
+      "severity": "high",
+      "paranoia_level": 1,
+      "targets": ["query", "body"],
+      "enabled": true
+    },
+    {
+      "id": "SQLI-004",
+      "category": "sqli",
+      "name": "SQL Comment-Based Injection",
+      "pattern": "(?i)(?:--[\\s\\r\\n]|\\/\\*.*?\\*\\/|#\\s*)",
+      "severity": "medium",
+      "paranoia_level": 2,
+      "targets": ["query", "body", "headers"],
+      "enabled": true
+    },
+    {
+      "id": "SQLI-005",
+      "category": "sqli",
+      "name": "SQL Stacked Queries via Semicolon",
+      "pattern": "(?i);\\s*(?:drop|alter|delete|insert|update|select|truncate|exec(?:ute)?)\\b",
+      "severity": "high",
+      "paranoia_level": 1,
+      "targets": ["query", "body"],
+      "enabled": true
+    },
+    {
+      "id": "SQLI-006",
+      "category": "sqli",
+      "name": "SQL Hex Encoded Value Injection",
+      "pattern": "(?i)\\b0x[0-9a-f]{4,}\\b",
+      "severity": "medium",
+      "paranoia_level": 2,
+      "targets": ["query", "body"],
+      "enabled": true
+    },
+    {
+      "id": "SQLI-007",
+      "category": "sqli",
+      "name": "SQL Time-Based Blind Sleep/Benchmark",
+      "pattern": "(?i)\\b(?:sleep\\s*\\(\\s*\\d+|benchmark\\s*\\(\\s*\\d+|waitfor\\s+delay|pg_sleep\\s*\\()",
+      "severity": "high",
+      "paranoia_level": 1,
+      "targets": ["query", "body"],
+      "enabled": true
+    },
+    {
+      "id": "SQLI-008",
+      "category": "sqli",
+      "name": "SQL Information Schema Probing",
+      "pattern": "(?i)\\binformation_schema\\.(?:tables|columns|schemata|routines|user_privileges)\\b",
+      "severity": "high",
+      "paranoia_level": 1,
+      "targets": ["query", "body"],
+      "enabled": true
+    },
+    {
+      "id": "SQLI-009",
+      "category": "sqli",
+      "name": "SQL File Write via INTO OUTFILE/DUMPFILE",
+      "pattern": "(?i)\\binto\\s+(?:outfile|dumpfile)\\s+['\"]",
+      "severity": "high",
+      "paranoia_level": 1,
+      "targets": ["query", "body"],
+      "enabled": true
+    },
+    {
+      "id": "SQLI-010",
+      "category": "sqli",
+      "name": "SQL Function Extraction and Concatenation",
+      "pattern": "(?i)\\b(?:concat(?:_ws)?|group_concat|char|ascii|substring|substr|mid)\\s*\\(",
+      "severity": "medium",
+      "paranoia_level": 2,
+      "targets": ["query", "body"],
+      "enabled": true
+    },
+    {
+      "id": "XSS-001",
+      "category": "xss",
+      "name": "HTML Script Tag Injection",
+      "pattern": "(?i)<\\s*script\\b[^>]*>",
+      "severity": "high",
+      "paranoia_level": 1,
+      "targets": ["query", "body", "path"],
+      "enabled": true
+    },
+    {
+      "id": "XSS-002",
+      "category": "xss",
+      "name": "Inline HTML Event Handler Attributes",
+      "pattern": "(?i)\\bon(?:error|load|click|mouseover|mouseenter|focus|blur|change|submit|keydown|keyup)\\s*=",
+      "severity": "high",
+      "paranoia_level": 1,
+      "targets": ["query", "body", "headers"],
+      "enabled": true
+    },
+    {
+      "id": "XSS-003",
+      "category": "xss",
+      "name": "JavaScript Pseudo-Protocol URI",
+      "pattern": "(?i)javascript\\s*:\\s*[^\\s\"'>]+",
+      "severity": "high",
+      "paranoia_level": 1,
+      "targets": ["query", "body"],
+      "enabled": true
+    },
+    {
+      "id": "XSS-004",
+      "category": "xss",
+      "name": "Data URI HTML/JS Execution",
+      "pattern": "(?i)data\\s*:\\s*(?:text\\/html|application\\/javascript)\\b",
+      "severity": "high",
+      "paranoia_level": 2,
+      "targets": ["query", "body"],
+      "enabled": true
+    },
+    {
+      "id": "XSS-005",
+      "category": "xss",
+      "name": "SVG Tag with Embedded Event Handler",
+      "pattern": "(?i)<\\s*svg\\b[^>]*\\bon[a-z]+\\s*=",
+      "severity": "high",
+      "paranoia_level": 1,
+      "targets": ["query", "body"],
+      "enabled": true
+    },
+    {
+      "id": "XSS-006",
+      "category": "xss",
+      "name": "Suspicious IMG Tag with Dynamic Source",
+      "pattern": "(?i)<\\s*img\\b[^>]*\\bsrc\\s*=\\s*['\"]?(?:javascript:|data:)",
+      "severity": "high",
+      "paranoia_level": 1,
+      "targets": ["query", "body"],
+      "enabled": true
+    },
+    {
+      "id": "XSS-007",
+      "category": "xss",
+      "name": "CSS Expression / Dynamic Property Execution",
+      "pattern": "(?i)expression\\s*\\(\\s*.*\\)",
+      "severity": "medium",
+      "paranoia_level": 3,
+      "targets": ["query", "body"],
+      "enabled": true
+    },
+    {
+      "id": "XSS-008",
+      "category": "xss",
+      "name": "JavaScript Dialog Invocations",
+      "pattern": "(?i)\\b(?:alert|confirm|prompt)\\s*\\(",
+      "severity": "medium",
+      "paranoia_level": 2,
+      "targets": ["query", "body"],
+      "enabled": true
+    },
+    {
+      "id": "TRAV-001",
+      "category": "path_traversal",
+      "name": "Standard Directory Traversal Slash Pattern",
+      "pattern": "\\.\\.(?:/|%2f|%252f)",
+      "severity": "high",
+      "paranoia_level": 1,
+      "targets": ["path", "query"],
+      "enabled": true
+    },
+    {
+      "id": "TRAV-002",
+      "category": "path_traversal",
+      "name": "Windows Directory Traversal Backslash Pattern",
+      "pattern": "\\.\\.(?:\\\\|%5c|%255c)",
+      "severity": "high",
+      "paranoia_level": 1,
+      "targets": ["path", "query"],
+      "enabled": true
+    },
+    {
+      "id": "TRAV-003",
+      "category": "path_traversal",
+      "name": "UNIX System File Access /etc/passwd",
+      "pattern": "(?i)(?:/|\\\\)?etc\\/(?:passwd|shadow|hosts|group)",
+      "severity": "high",
+      "paranoia_level": 1,
+      "targets": ["path", "query", "body"],
+      "enabled": true
+    },
+    {
+      "id": "TRAV-004",
+      "category": "path_traversal",
+      "name": "Windows System Root File Access",
+      "pattern": "(?i)(?:[a-z]:|%5c|\\\\|/)?(?:windows|winnt)\\/(?:system32|system|win\\.ini|boot\\.ini)",
+      "severity": "high",
+      "paranoia_level": 1,
+      "targets": ["path", "query", "body"],
+      "enabled": true
+    },
+    {
+      "id": "TRAV-005",
+      "category": "path_traversal",
+      "name": "Null Byte Path Truncation",
+      "pattern": "(?:%00|\\x00|\\\\0)",
+      "severity": "high",
+      "paranoia_level": 1,
+      "targets": ["path", "query"],
+      "enabled": true
+    },
+    {
+      "id": "CMDI-001",
+      "category": "command_injection",
+      "name": "Semicolon Command Chaining",
+      "pattern": ";\\s*(?:ls|cat|id|whoami|uname|nc|netcat|bash|sh|cmd|powershell|curl|wget)\\b",
+      "severity": "high",
+      "paranoia_level": 1,
+      "targets": ["query", "body"],
+      "enabled": true
+    },
+    {
+      "id": "CMDI-002",
+      "category": "command_injection",
+      "name": "Pipe Command Chaining",
+      "pattern": "\\|\\s*(?:ls|cat|id|whoami|uname|nc|netcat|bash|sh|cmd|powershell|curl|wget)\\b",
+      "severity": "high",
+      "paranoia_level": 1,
+      "targets": ["query", "body"],
+      "enabled": true
+    },
+    {
+      "id": "CMDI-003",
+      "category": "command_injection",
+      "name": "Backtick Shell Subshell Execution",
+      "pattern": "`[^`\\r\\n]+`",
+      "severity": "high",
+      "paranoia_level": 2,
+      "targets": ["query", "body"],
+      "enabled": true
+    },
+    {
+      "id": "CMDI-004",
+      "category": "command_injection",
+      "name": "Shell Command Substitution $()",
+      "pattern": "\\$\\([^\\)\\r\\n]+\\)",
+      "severity": "high",
+      "paranoia_level": 1,
+      "targets": ["query", "body"],
+      "enabled": true
+    },
+    {
+      "id": "CMDI-005",
+      "category": "command_injection",
+      "name": "Remote Binary Downloader and Infiltration Tools",
+      "pattern": "(?i)\\b(?:curl|wget|nc|netcat|tftp|certutil|bitsadmin)\\s+-[a-z0-9]",
+      "severity": "medium",
+      "paranoia_level": 2,
+      "targets": ["query", "body"],
+      "enabled": true
+    }
+  ]
+}

