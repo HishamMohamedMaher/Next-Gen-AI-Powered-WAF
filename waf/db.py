@@ -97,23 +97,18 @@ def init_db(db_path: str = DB_PATH) -> None:
     """Initialize SQLite database connections, enable WAL mode, and create tables with indexes."""
     global _write_conn, _read_conn
 
-    # 1. التأكد من وجود مجلد data
     os.makedirs(os.path.dirname(db_path), exist_ok=True)
 
-    # 2. إنشاء اتصال الكتابة
     _write_conn = sqlite3.connect(db_path, check_same_thread=False)
     _write_conn.row_factory = sqlite3.Row
 
-    # 3. تفعيل وضع الـ WAL للسرعة وحل مشكلة القفل
     _write_conn.execute("PRAGMA journal_mode=WAL;")
     _write_conn.execute("PRAGMA busy_timeout=5000;")
 
-    # 4. إنشاء اتصال القراءة المخصص للـ Dashboard
     _read_conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, check_same_thread=False)
     _read_conn.row_factory = sqlite3.Row
     _read_conn.execute("PRAGMA busy_timeout=5000;")
 
-    # 5. تنفيـذ إنشاء الجداول الأربعة
     cursor = _write_conn.cursor()
     cursor.executescript(SCHEMA_WAF_EVENTS)
     cursor.executescript(SCHEMA_ALERTS)
