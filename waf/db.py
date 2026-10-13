@@ -7,7 +7,9 @@ dynamic blacklist persistence, and threat intelligence cache records.
 
 from __future__ import annotations
 
+import datetime
 import logging
+import os
 import sqlite3
 from typing import Any, Dict, List, Optional
 
@@ -92,81 +94,194 @@ CREATE INDEX IF NOT EXISTS idx_abuseipdb_cache_cached_at ON abuseipdb_cache(cach
 
 
 def init_db(db_path: str = DB_PATH) -> None:
-    """Initialize SQLite database connections, enable WAL mode, and create tables with indexes.
+    """Initialize SQLite database connections, enable WAL mode, and create tables with indexes."""
+    global _write_conn, _read_conn
 
-    Sets busy_timeout pragmas, configures WAL journal mode, and executes table
-    creation scripts for waf_events, alerts, blacklist, and abuseipdb_cache tables.
+    # 1. التأكد من وجود مجلد data
+    os.makedirs(os.path.dirname(db_path), exist_ok=True)
 
-    Args:
-        db_path: Path to the SQLite database file.
-    """
-    pass
+    # 2. إنشاء اتصال الكتابة
+    _write_conn = sqlite3.connect(db_path, check_same_thread=False)
+    _write_conn.row_factory = sqlite3.Row
+
+    # 3. تفعيل وضع الـ WAL للسرعة وحل مشكلة القفل
+    _write_conn.execute("PRAGMA journal_mode=WAL;")
+    _write_conn.execute("PRAGMA busy_timeout=5000;")
+
+    # 4. إنشاء اتصال القراءة المخصص للـ Dashboard
+    _read_conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, check_same_thread=False)
+    _read_conn.row_factory = sqlite3.Row
+    _read_conn.execute("PRAGMA busy_timeout=5000;")
+
+    # 5. تنفيـذ إنشاء الجداول الأربعة
+    cursor = _write_conn.cursor()
+    cursor.executescript(SCHEMA_WAF_EVENTS)
+    cursor.executescript(SCHEMA_ALERTS)
+    cursor.executescript(SCHEMA_BLACKLIST)
+    cursor.executescript(SCHEMA_ABUSEIPDB_CACHE)
+    _write_conn.commit()
+
+    logger.info(f"Database initialized successfully at {db_path} with WAL mode.")
 
 
 def close_db() -> None:
     """Safely commit pending transactions and close both read and write connections."""
-    pass
+    global _write_conn, _read_conn
+
+    if _write_conn:
+        _write_conn.commit()
+        _write_conn.close()
+        _write_conn = None
+
+    if _read_conn:
+        _read_conn.close()
+        _read_conn = None
+
+    logger.info("Database connections closed cleanly.")
 
 
 def insert_batch(events: List[WAFEvent]) -> None:
-    """Insert a batch of WAFEvent objects into waf_events in a single transaction.
+    """Insert a batch of WAFEvent objects into waf_events in a single transaction."""
+    global _write_conn
+    if not _write_conn or not events:
+        return
 
-    Uses executemany on the write connection for optimal insertion throughput.
-
-    Args:
-        events: List of WAFEvent instances to persist.
+    query = """
+    INSERT INTO waf_events (
+        request_id, timestamp, client_ip, method, path, payload_snippet,
+        attack_type, layer, rule_id, confidence, action, processing_time_ms,
+        country, latitude, longitude
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """
-    pass
+
+    data = [
+        (
+            e.request_id,
+            str(e.timestamp),
+            e.client_ip,
+            e.method,
+            e.path,
+            e.payload_snippet,
+            e.attack_type.value if hasattr(e.attack_type, 'value') else str(e.attack_type),
+            e.layer.value if hasattr(e.layer, 'value') else str(e.layer),
+            e.rule_id,
+            e.confidence,
+            e.action.value if hasattr(e.action, 'value') else str(e.action),
+            e.processing_time_ms,
+            e.country,
+            e.latitude,
+            e.longitude,
+        )
+        for e in events
+    ]
+
+    cursor = _write_conn.cursor()
+    cursor.executemany(query, data)
+    _write_conn.commit()
 
 
 def insert_alert(alert: Alert) -> None:
-    """Persist a new security alert record or upsert count and last_seen on duplicate.
+    """Persist a new security alert record or upsert count and last_seen on duplicate."""
+    global _write_conn
+    if not _write_conn:
+        return
 
-    Args:
-        alert: The Alert instance to store in the database.
+    query = """
+    INSERT INTO alerts (
+        id, created_at, last_seen, severity, attack_type, client_ip,
+        path, payload_snippet, confidence, count, status, rule_id
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET
+        last_seen = excluded.last_seen,
+        count = alerts.count + 1;
     """
-    pass
+
+    cursor = _write_conn.cursor()
+    cursor.execute(
+        query,
+        (
+            alert.id,
+            str(alert.created_at),
+            str(alert.last_seen),
+            alert.severity,
+            alert.attack_type.value if hasattr(alert.attack_type, 'value') else str(alert.attack_type),
+            alert.client_ip,
+            alert.path,
+            alert.payload_snippet,
+            alert.confidence,
+            alert.count,
+            alert.status,
+            alert.rule_id,
+        ),
+    )
+    _write_conn.commit()
 
 
 def update_alert_status(alert_id: str, status: str) -> None:
-    """Update resolution status of a security alert.
+    """Update resolution status of a security alert."""
+    global _write_conn
+    if not _write_conn:
+        return
 
-    Args:
-        alert_id: Identifier of the alert to modify.
-        status: New status value (e.g., 'open', 'acknowledged', 'resolved', 'ignored').
-    """
-    pass
+    query = "UPDATE alerts SET status = ? WHERE id = ?"
+    cursor = _write_conn.cursor()
+    cursor.execute(query, (status, alert_id))
+    _write_conn.commit()
 
 
 def get_blacklist_entries() -> List[Dict[str, Any]]:
-    """Retrieve all active blacklist records from SQLite.
+    """Retrieve all active blacklist records from SQLite."""
+    global _read_conn
+    if not _read_conn:
+        return []
 
-    Returns:
-        A list of dictionaries representing blacklist rows containing ip, reason,
-        created_at, and expires_at timestamps.
-    """
-    pass
+    cursor = _read_conn.cursor()
+    cursor.execute("SELECT ip, reason, created_at, expires_at FROM blacklist")
+    rows = cursor.fetchall()
+
+    return [dict(row) for row in rows]
 
 
 def cache_abuseipdb(ip: str, score: int, raw_response: str) -> None:
-    """Store or update AbuseIPDB query response in the local cache table.
+    """Store or update AbuseIPDB query response in the local cache table."""
+    global _write_conn
+    if not _write_conn:
+        return
 
-    Args:
-        ip: The checked IP address.
-        score: Threat confidence score (0-100).
-        raw_response: Full JSON serialized API response payload.
+    now = datetime.datetime.utcnow().isoformat()
+    query = """
+    INSERT INTO abuseipdb_cache (ip, abuse_confidence_score, raw_response, cached_at)
+    VALUES (?, ?, ?, ?)
+    ON CONFLICT(ip) DO UPDATE SET
+        abuse_confidence_score = excluded.abuse_confidence_score,
+        raw_response = excluded.raw_response,
+        cached_at = excluded.cached_at;
     """
-    pass
+
+    cursor = _write_conn.cursor()
+    cursor.execute(query, (ip, score, raw_response, now))
+    _write_conn.commit()
 
 
 def get_abuseipdb_cache(ip: str, max_age_hours: int = 24) -> Optional[Dict[str, Any]]:
-    """Fetch cached AbuseIPDB result if it exists and has not exceeded max_age_hours.
+    """Fetch cached AbuseIPDB result if it exists and has not exceeded max_age_hours."""
+    global _read_conn
+    if not _read_conn:
+        return None
 
-    Args:
-        ip: The target IP address to check in cache.
-        max_age_hours: Maximum allowable cache age in hours before considering stale.
+    cursor = _read_conn.cursor()
+    cursor.execute(
+        "SELECT ip, abuse_confidence_score, raw_response, cached_at FROM abuseipdb_cache WHERE ip = ?",
+        (ip,),
+    )
+    row = cursor.fetchone()
 
-    Returns:
-        A dictionary containing cached abuse score and raw payload, or None if expired/absent.
-    """
-    pass
+    if not row:
+        return None
+
+    record = dict(row)
+    cached_time = datetime.datetime.fromisoformat(record["cached_at"])
+    if datetime.datetime.utcnow() - cached_time > datetime.timedelta(hours=max_age_hours):
+        return None
+
+    return record
