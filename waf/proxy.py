@@ -13,7 +13,7 @@ import httpx
 
 from waf.models import RequestContext
 
-BACKEND_URL: str = os.getenv("BACKEND_URL", "http://juiceshop:3000")
+BACKEND_URL: str = os.getenv("BACKEND_URL", "http://localhost:3000")
 
 HOP_BY_HOP: frozenset[str] = frozenset({
     "connection",
