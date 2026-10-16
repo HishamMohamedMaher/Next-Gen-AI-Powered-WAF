@@ -32,41 +32,41 @@ class NormalizedResult:
     decode_iterations: int
 
 
-def _iterative_url_decode(text: str, max_iterations: int = MAX_DECODE_ITERATIONS) -> Tuple[str, int]:
-    """Iteratively decode URL-encoded text until stable or max iterations reached.
 
-    Args:
-        text: Input string to decode.
-        max_iterations: Maximum unquote iterations allowed.
+from urllib.parse import unquote
 
-    Returns:
-        Tuple of (decoded_text, iterations_performed).
-    """
-    pass
+def _iterative_url_decode(text: str, max_iterations: int = 5) -> tuple[str, int]:
+    """Iteratively URL-decode text until it stabilizes or hits the iteration limit."""
+    current = text
+    iterations = 0
 
+    while iterations < max_iterations:
+        decoded = unquote(current)
+        if decoded == current:
+            break
+        current = decoded
+        iterations += 1
+
+    return current, iterations
+
+
+import html
 
 def _decode_html_entities(text: str) -> str:
-    """Decode HTML entities in text (e.g. &amp;, &lt;, &#x27;).
+    """Decode HTML entities (named, decimal, hex) to plain text."""
+    if not text:
+        return ""
+    return html.unescape(text)
 
-    Args:
-        text: Input string.
 
-    Returns:
-        String with HTML entities unescaped.
-    """
-    pass
 
+import unicodedata
 
 def _normalize_unicode(text: str) -> str:
-    """Apply Unicode NFKC normalization to resolve homoglyphs and compatibility characters.
-
-    Args:
-        text: Input string.
-
-    Returns:
-        Unicode NFKC normalized string.
-    """
-    pass
+    """Normalize Unicode characters using NFKC decomposition."""
+    if not text:
+        return ""
+    return unicodedata.normalize("NFKC", text)
 
 
 def _strip_null_bytes_and_whitespace(text: str) -> str:
