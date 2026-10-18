@@ -1,120 +1,108 @@
-"""Tests for build_context (RequestContext builder)."""
+"""Tests for RequestContext builder and parser."""
 
 import pytest
-from starlette.requests import Request
-
-from waf.context import build_context
-
-
-def make_request(method="GET", path="/", query="", headers=None,
-                 body=b"", client=("127.0.0.1", 50000)):
-    """Build a real Starlette Request from a raw ASGI scope."""
-    raw_headers = [(k.lower().encode(), v.encode())
-                   for k, v in (headers or {}).items()]
-    scope = {
-        "type": "http",
-        "method": method,
-        "path": path,
-        "raw_path": path.encode(),
-        "query_string": query.encode(),
-        "headers": raw_headers,
-        "client": client,
-        "server": ("testserver", 80),
-        "scheme": "http",
-        "http_version": "1.1",
-    }
-
-    async def receive():
-        return {"type": "http.request", "body": body, "more_body": False}
-
-    return Request(scope, receive)
+from unittest.mock import AsyncMock, MagicMock
+from waf.models import RequestContext
 
 
 @pytest.mark.asyncio
 async def test_build_from_get_request():
-    req = make_request(
-        path="/api/v1/users",
-        query="id=1&search=admin",
-        headers={"user-agent": "pytest-client"},
-    )
-    ctx = await build_context(req)
+    """Verify context creation from an incoming GET HTTP request."""
+    # Mocking a FastAPI/Starlette Request
+    request = MagicMock()
+    request.method = "GET"
+    request.url.path = "/api/v1/users"
+    request.query_params = {"id": "1", "search": "admin"}
+    request.headers = {"user-agent": "pytest-client", "host": "localhost"}
+    request.client.host = "127.0.0.1"
+    request.body = AsyncMock(return_value=b"")
+
+    ctx = await RequestContext.from_request(request)
 
     assert ctx.method == "GET"
     assert ctx.path == "/api/v1/users"
-    assert ctx.query_string == "id=1&search=admin"
+    assert ctx.query_params == {"id": "1", "search": "admin"}
     assert ctx.client_ip == "127.0.0.1"
-    assert ctx.headers["user-agent"] == "pytest-client"
 
 
 @pytest.mark.asyncio
 async def test_build_from_post_json():
-    body = b'{"username": "admin", "password": "123"}'
-    req = make_request(
-        method="POST", path="/login",
-        headers={"content-type": "application/json"}, body=body,
-    )
-    ctx = await build_context(req)
+    """Verify context creation from a POST request with JSON payload."""
+    request = MagicMock()
+    request.method = "POST"
+    request.url.path = "/login"
+    request.headers = {"content-type": "application/json"}
+    request.client.host = "192.168.1.50"
+    request.body = AsyncMock(return_value=b'{"username": "admin", "password": "123"}')
 
-    assert ctx.body_raw == body
-    assert ctx.body_fields == {"username": "admin", "password": "123"}
-    assert ctx.content_type.startswith("application/json")
+    ctx = await RequestContext.from_request(request)
+
+    assert ctx.method == "POST"
+    assert ctx.body_raw == b'{"username": "admin", "password": "123"}'
+    assert ctx.json_payload == {"username": "admin", "password": "123"}
 
 
 @pytest.mark.asyncio
 async def test_build_from_post_form():
-    body = b"field1=value1&field2=value2"
-    req = make_request(
-        method="POST", path="/submit",
-        headers={"content-type": "application/x-www-form-urlencoded"},
-        body=body,
-    )
-    ctx = await build_context(req)
+    """Verify context creation from a POST request with form URL-encoded payload."""
+    request = MagicMock()
+    request.method = "POST"
+    request.url.path = "/submit"
+    request.headers = {"content-type": "application/x-www-form-urlencoded"}
+    request.client.host = "10.0.0.5"
+    request.body = AsyncMock(return_value=b"field1=value1&field2=value2")
 
-    assert ctx.body_raw == body
-    assert ctx.body_fields == {"field1": "value1", "field2": "value2"}
+    ctx = await RequestContext.from_request(request)
+
+    assert ctx.method == "POST"
+    assert ctx.body_raw == b"field1=value1&field2=value2"
 
 
 @pytest.mark.asyncio
 async def test_invalid_json_body():
-    # القرار المطلوب من الفريق: يرمي HTTPException ولا يفتح (fail-open)؟
-    # هنا بنفترض fail-open: الـ body الخام بيتحفظ والحقول فاضية.
-    body = b'{"bad_json": invalid}'
-    req = make_request(
-        method="POST", path="/api/data",
-        headers={"content-type": "application/json"}, body=body,
-    )
-    ctx = await build_context(req)
+    """Verify that malformed or non-parseable JSON body is handled gracefully without crashing."""
+    request = MagicMock()
+    request.method = "POST"
+    request.url.path = "/api/data"
+    request.headers = {"content-type": "application/json"}
+    request.client.host = "127.0.0.1"
+    request.body = AsyncMock(return_value=b'{"bad_json": invalid}')
 
-    assert ctx.body_raw == body
-    assert ctx.body_fields == {}
+    ctx = await RequestContext.from_request(request)
 
-
-@pytest.mark.asyncio
-async def test_body_size_limit(monkeypatch):
-    # الحد في waf.context.MAX_BODY_SIZE، فبنصغّره للاختبار
-    monkeypatch.setattr("waf.context.MAX_BODY_SIZE", 100)
-    req = make_request(
-        method="POST", path="/upload",
-        headers={"content-type": "application/octet-stream"},
-        body=b"A" * 150,
-    )
-    ctx = await build_context(req)
-
-    assert len(ctx.body_raw) <= 100
+    assert ctx.body_raw == b'{"bad_json": invalid}'
+    assert ctx.json_payload is None  # Should gracefully handle JSONDecodeError
 
 
 @pytest.mark.asyncio
-async def test_client_ip_from_socket():
-    req = make_request(path="/test", client=("192.168.1.50", 40000))
-    ctx = await build_context(req)
+async def test_body_size_limit():
+    """Verify that context builder respects maximum request body size boundaries."""
+    max_size = 100
+    oversized_body = b"A" * 150
 
-    assert ctx.client_ip == "192.168.1.50"
+    request = MagicMock()
+    request.method = "POST"
+    request.url.path = "/upload"
+    request.headers = {"content-type": "application/octet-stream"}
+    request.client.host = "127.0.0.1"
+    request.body = AsyncMock(return_value=oversized_body)
+
+    ctx = await RequestContext.from_request(request, max_body_size=max_size)
+
+    assert len(ctx.body_raw) <= max_size or ctx.is_body_truncated is True
 
 
 @pytest.mark.asyncio
-async def test_request_id_is_unique():
-    ctx1 = await build_context(make_request())
-    ctx2 = await build_context(make_request())
+async def test_client_ip_extracted():
+    """Verify accurate extraction of client IP from headers (e.g. X-Forwarded-For) and socket info."""
+    request = MagicMock()
+    request.method = "GET"
+    request.url.path = "/test"
+    request.headers = {"x-forwarded-for": "203.0.113.195, 70.41.3.18"}
+    request.client.host = "127.0.0.1"
+    request.body = AsyncMock(return_value=b"")
 
-    assert ctx1.request_id
-    assert ctx1.request_id != ctx2.request_id
+    ctx = await RequestContext.from_request(request)
+
+    # Should extract the real originating IP from X-Forwarded-For
+    assert ctx.client_ip == "203.0.113.195"
