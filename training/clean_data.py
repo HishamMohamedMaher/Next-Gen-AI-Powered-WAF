@@ -26,27 +26,91 @@ logger = logging.getLogger(__name__)
 
 
 def load_srbh(path: Union[str, Path]) -> pd.DataFrame:
-    """Load and parse the SRBH dataset from file.
-
-    Args:
-        path: File path to the raw SRBH dataset (CSV, JSON, or text).
-
-    Returns:
-        pd.DataFrame: Structured DataFrame with standard columns ['payload', 'label', 'attack_type'].
+    """Load SR-BH2020 CSV; raw staging text, NOT normalized TF-IDF text.
+    Returns payload, binary label, attack_type without headers/IPs or responses.
     """
-    pass
+    source = Path(path)
+    if not source.is_file():
+        raise FileNotFoundError(source)
+    request_cols = ['request_http_method', 'request_http_request', 'request_body']
+    normal_col = '000 - Normal'
+    cols = pd.read_csv(source, nrows=0, encoding='utf-8-sig').columns.tolist()
+    attack_cols = [c for c in cols if c != normal_col and c.split(' - ', 1)[0].isdigit()]
+    missing = [c for c in request_cols + [normal_col] if c not in cols]
+    if missing or not attack_cols:
+        raise ValueError(f'Invalid SR-BH columns; missing={missing}, attack_columns={len(attack_cols)}')
+    yes = {'1', '1.0', 'true', 't', 'yes'}
+    no = {'0', '0.0', 'false', 'f', 'no', ''}
+    chunks, n = [], 0
+    for chunk in pd.read_csv(source, usecols=request_cols + [normal_col] + attack_cols,
+                             dtype=str, keep_default_na=False, chunksize=25000,
+                             encoding='utf-8-sig'):
+        flags = chunk[[normal_col] + attack_cols].apply(lambda col: col.str.strip().str.lower())
+        if not flags.isin(yes | no).all().all():
+            raise ValueError(f'Unexpected SR-BH CAPEC flags around row {n}')
+        positive = flags.isin(yes)
+        malicious = positive[attack_cols].any(axis=1)
+        if positive[normal_col].eq(malicious).any():
+            raise ValueError(f'Conflicting/missing SR-BH labels around row {n}')
+        method = chunk['request_http_method'].str.strip()
+        body = chunk['request_body']
+        payload = method + ' ' + chunk['request_http_request']
+        payload = payload.where(body.eq(''), payload + '\n' + body)
+        kinds = positive[attack_cols].apply(
+            lambda row: ';'.join(col for col in attack_cols if row[col]), axis=1
+        )
+        chunks.append(pd.DataFrame({
+            'payload': payload.to_numpy(),
+            'label': malicious.astype('int8').to_numpy(),
+            'attack_type': kinds.where(malicious, 'benign').to_numpy(),
+        }))
+        n += len(chunk)
+    if not chunks:
+        raise ValueError('Empty SR-BH dataset')
+    return pd.concat(chunks, ignore_index=True)
+
 
 
 def load_httpparams(path: Union[str, Path]) -> pd.DataFrame:
-    """Load and parse the HTTPParams dataset from file.
-
-    Args:
-        path: File path to the raw HTTPParams dataset.
-
-    Returns:
-        pd.DataFrame: Structured DataFrame with standard columns ['payload', 'label', 'attack_type'].
+    """Load only HttpParams payload_train.csv from ZIP; never read held-out test/full.
+    Standalone CSV accepted when supplied explicitly. Raw text, no normalization.
     """
-    pass
+    from zipfile import ZipFile
+    source = Path(path)
+    if not source.is_file():
+        raise FileNotFoundError(source)
+    if source.suffix.lower() == '.zip':
+        with ZipFile(source) as archive:
+            candidates = [n for n in archive.namelist()
+                          if Path(n).name == 'payload_train.csv' and not n.endswith('/')]
+            if len(candidates) != 1:
+                raise ValueError('HTTPParams ZIP must contain exactly one payload_train.csv')
+            with archive.open(candidates[0]) as f:
+                df = pd.read_csv(f, dtype=str, keep_default_na=False, encoding='utf-8-sig')
+    elif source.suffix.lower() == '.csv':
+        df = pd.read_csv(source, dtype=str, keep_default_na=False, encoding='utf-8-sig')
+    else:
+        raise ValueError('Expected a CSV or ZIP file')
+    df.columns = df.columns.str.strip().str.lower()
+    if df.columns.duplicated().any() or not {'payload', 'label'}.issubset(df.columns):
+        raise ValueError(f'Invalid HTTPParams headers: {list(df.columns)}')
+    if df.empty:
+        raise ValueError('Empty HTTPParams dataset')
+    labels = df['label'].str.strip().str.lower()
+    mapping = {'norm': 0, 'normal': 0, 'benign': 0, '0': 0,
+               'anom': 1, 'anomaly': 1, 'attack': 1, 'malicious': 1, '1': 1}
+    if not labels.isin(mapping).all():
+        raise ValueError(f'Unknown HTTPParams labels: {sorted(set(labels) - set(mapping))}')
+    binary = labels.map(mapping).astype('int8')
+    types = (df['attack_type'].str.strip() if 'attack_type' in df
+             else pd.Series([''] * len(df), index=df.index))
+    types = types.where(binary.eq(1), 'benign').replace('', 'unknown')
+    result = pd.DataFrame({'payload': df['payload'].astype(str),
+                           'label': binary, 'attack_type': types})
+    if result['payload'].str.len().eq(0).any():
+        raise ValueError('HTTPParams contains empty payloads; review required')
+    return result.reset_index(drop=True)
+
 
 
 def load_baseline(path: Union[str, Path]) -> pd.DataFrame:
