@@ -114,82 +114,191 @@ def load_httpparams(path: Union[str, Path]) -> pd.DataFrame:
 
 
 def load_baseline(path: Union[str, Path]) -> pd.DataFrame:
-    """Load baseline benign HTTP traffic samples.
+    """Load verified benign Juice Shop baseline samples from CSV/JSONL.
 
-    Args:
-        path: File path to baseline benign payload logs or dataset.
-
-    Returns:
-        pd.DataFrame: Structured DataFrame with standard columns ['payload', 'label', 'attack_type'].
+    Each record MUST explicitly carry benign label (0, 'benign', etc.) or
+    is_benign=True. Unverified logs are never silently labelled benign.
     """
-    pass
+    import json
+    src = Path(path)
+    if not src.is_file():
+        raise FileNotFoundError(src)
+    if src.suffix.lower() == '.csv':
+        frame = pd.read_csv(src, dtype=str, keep_default_na=False)
+    elif src.suffix.lower() in {'.jsonl', '.ndjson'}:
+        rows = []
+        with src.open(encoding='utf-8-sig') as fh:
+            for n, line in enumerate(fh, 1):
+                if line.strip():
+                    item = json.loads(line)
+                    if not isinstance(item, dict):
+                        raise ValueError(f'Invalid baseline object at line {n}')
+                    rows.append(item)
+        frame = pd.DataFrame(rows)
+    else:
+        raise ValueError('Baseline requires CSV or JSONL')
+    if frame.empty:
+        raise ValueError('Empty baseline file')
+    if 'label' in frame:
+        if not frame['label'].astype(str).str.strip().str.lower().isin({'0', '0.0', 'benign', 'norm', 'normal'}).all():
+            raise ValueError('Baseline has non-benign/unknown labels')
+    elif 'is_benign' in frame:
+        if not frame['is_benign'].astype(str).str.strip().str.lower().isin({'true', '1', 'yes'}).all():
+            raise ValueError('Baseline has unverified/non-benign rows')
+    else:
+        raise ValueError('Baseline records must explicitly verify benign label or is_benign')
+    if 'payload' in frame:
+        payload = frame['payload'].fillna('').astype(str)
+    else:
+        method = frame.get('method', frame.get('request_http_method'))
+        target = frame.get('path', frame.get('request_http_request'))
+        if method is None or target is None:
+            raise ValueError('Baseline needs payload OR method+path')
+        method = method.fillna('').astype(str).str.strip()
+        target = target.fillna('').astype(str)
+        body = frame.get('body', frame.get('request_body'))
+        if body is None:
+            body = pd.Series([''] * len(frame), index=frame.index)
+        else:
+            body = body.fillna('').astype(str)
+        payload = method + ' ' + target
+        payload = payload.where(body.eq(''), payload + '\n' + body)
+    if payload.str.strip().eq('').any():
+        raise ValueError('Baseline contains empty payloads')
+    return pd.DataFrame({'payload': payload.to_numpy(), 'label': 0,
+                         'attack_type': 'benign'}).reset_index(drop=True)
 
 
-def deduplicate(df: pd.DataFrame, text_column: str = "payload") -> pd.DataFrame:
-    """Deduplicate records based on SHA-256 hashes of the payload text.
 
-    Args:
-        df: Input DataFrame containing payload text.
-        text_column: Name of the column containing the raw payload text.
+def deduplicate(df: pd.DataFrame, text_column: str = 'payload') -> pd.DataFrame:
+    """SHA-256 exact-text deduplication, rejecting conflicting hash labels.
 
-    Returns:
-        pd.DataFrame: Deduplicated DataFrame with unique payload entries.
+    Keeps a request_group_sha256 key for group-safe splitting; NEVER resolves a
+    conflicting label by first-row selection or majority vote.
     """
-    pass
+    if not {text_column, 'label'}.issubset(df.columns):
+        raise ValueError('Missing payload/label columns')
+    result = df.copy()
+    if result[text_column].isna().any():
+        raise ValueError('Null payload must be reviewed before deduplication')
+    if not result['label'].isin([0, 1]).all():
+        raise ValueError('Only binary labels 0/1 accepted')
+    result['request_group_sha256'] = result[text_column].astype(str).map(
+        lambda value: hashlib.sha256(value.encode('utf-8')).hexdigest())
+    if result.groupby('request_group_sha256')['label'].nunique().gt(1).any():
+        raise ValueError('Conflicting request groups require quarantine BEFORE deduplicate')
+    return result.drop_duplicates('request_group_sha256', keep='first').reset_index(drop=True)
 
 
-def scan_mislabeled(
-    df: pd.DataFrame,
-    text_column: str = "payload",
-    label_column: str = "label",
-) -> Tuple[pd.DataFrame, pd.DataFrame]:
-    """Scan for mislabeled entries where attacks might be labeled as benign using known attack signatures.
 
-    Args:
-        df: Input DataFrame with payloads and labels.
-        text_column: Column name holding payload text.
-        label_column: Column name holding ground-truth binary label (0 for benign, 1 for attack).
+def scan_mislabeled(df: pd.DataFrame, text_column: str = 'payload',
+                    label_column: str = 'label') -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """Quarantine benign-labelled rows flagged by the TEAM signature engine.
 
-    Returns:
-        Tuple[pd.DataFrame, pd.DataFrame]: (clean_df, suspicious_df) where clean_df contains validated samples
-        and suspicious_df contains benign samples flagged for signature hits.
+    Fails closed when the shared normalizer/signature engine is still stubbed.
+    Never relabels a row automatically. This is NOT a heuristic substitute.
     """
-    pass
+    import ast
+    import inspect
+    from urllib.parse import urlsplit
+    from waf.models import RequestContext
+    from waf import normalizer, signatures
+    def not_stub(fn):
+        tree = ast.parse(inspect.getsource(fn))
+        node = next((n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)), None)
+        core = [x for x in node.body if not (isinstance(x, ast.Expr) and isinstance(x.value, ast.Constant)
+                 and isinstance(x.value.value, str))]
+        return bool(core) and not (len(core) == 1 and isinstance(core[0], ast.Pass))
+    if not not_stub(normalizer.normalize_context) or not not_stub(signatures.scan):
+        raise RuntimeError('WAITING_ON_MEMBER_2: shared normalizer and signature scan not implemented')
+    if not {text_column, label_column}.issubset(df):
+        raise ValueError('Missing payload/label columns')
+    suspicious = []
+    for idx, row in df[df[label_column].eq(0)].iterrows():
+        raw = str(row[text_column])
+        request_line, sep, body = raw.partition('\n')
+        try:
+            method, target = request_line.split(' ', 1)
+        except ValueError as error:
+            raise ValueError('Non-HTTP payload cannot be signature-scanned as RequestContext') from error
+        target = target.strip()
+        parsed = urlsplit(target)
+        path = parsed.path or '/'
+        ctx = RequestContext(method=method, path=path,
+                             query_string=parsed.query, body_raw=body.encode('utf-8'),
+                             body_fields={'__raw_body__': body} if sep else {})
+        normalized_ctx = normalizer.normalize_context(ctx)
+        if normalized_ctx is None:
+            raise RuntimeError('Shared normalizer returned None')
+        if signatures.scan(normalized_ctx) is not None:
+            suspicious.append(idx)
+    return df.drop(index=suspicious).copy(), df.loc[suspicious].copy()
+
 
 
 def remove_headers(text: str) -> str:
-    """Strip HTTP header lines and preserve only the query parameters and request payload body.
+    """Extract the request target and body without user-agent/host/cookie headers.
 
-    Args:
-        text: Raw HTTP request or payload string with possible headers.
-
-    Returns:
-        str: Cleaned payload with headers stripped out.
+    Handles full HTTP request lines, a raw METHOD+target staging string, or
+    standalone parameter values without interpreting them as HTTP headers.
     """
-    pass
+    import re
+    if not isinstance(text, str):
+        raise TypeError('Request text must be a string')
+    raw = text.replace('\r\n', '\n')
+    lines = raw.split('\n')
+    first = lines[0]
+    match = re.fullmatch(r'[A-Z]+\s+(\S+)(?:\s+HTTP/\d(?:\.\d)?)?', first.strip())
+    if not match:
+        return text
+    target = match.group(1)
+    remaining = lines[1:]
+    sep = next((i for i, l in enumerate(remaining) if l == ''), None)
+    if sep is not None:
+        # Headers are present only if at least one valid-looking field follows
+        # and all nonblank lines before the blank separator are header lines.
+        head = remaining[:sep]
+        if head and all(re.fullmatch(r'[A-Za-z0-9-]+:\s*.*', l) for l in head):
+            body = '\n'.join(remaining[sep+1:])
+            return target + ('\n' + body if body else '')
+    # Day1 SRBH representation: METHOD + target + optional raw body on next line.
+    body = '\n'.join(remaining)
+    return target + ('\n' + body if body else '')
 
 
-def normalize_all(df: pd.DataFrame, text_column: str = "payload") -> pd.DataFrame:
-    """Apply the standard AI-WAF normalizer to every row in the dataset.
 
-    Args:
-        df: Input DataFrame containing payload strings.
-        text_column: Target column to normalize.
+def normalize_all(df: pd.DataFrame, text_column: str = 'payload') -> pd.DataFrame:
+    """Apply Member 2's shared normalizer without replacing original text.
 
-    Returns:
-        pd.DataFrame: DataFrame with normalized payload text column updated or added.
+    This is an auditable low-level text utility, NOT the canonical
+    RequestContext-to-TF-IDF feature builder used at inference time.
     """
-    pass
+    if text_column not in df:
+        raise ValueError(f'Missing text column: {text_column}')
+    probe = normalize_text('Test%2520Value')
+    if probe is None or not isinstance(getattr(probe, 'normalized', None), str):
+        raise RuntimeError('WAITING_ON_MEMBER_2: normalize_text not implemented')
+    result = df.copy()
+    def convert(value):
+        normalized = normalize_text(str(value))
+        if not isinstance(getattr(normalized, 'normalized', None), str):
+            raise RuntimeError('Normalizer returned invalid NormalizedResult')
+        return normalized.normalized
+    result[f'{text_column}_normalized'] = result[text_column].map(convert)
+    return result
+
 
 
 def clean_pipeline(raw_dir: Union[str, Path], output_dir: Union[str, Path]) -> None:
-    """Orchestrate the end-to-end data cleaning, sanitization, and normalization pipeline.
+    """Final week-1 normalized preparation; fail closed if teammates are pending.
 
-    Args:
-        raw_dir: Directory containing raw data files.
-        output_dir: Target directory to persist cleaned data files.
+    Produces canonical payloads only after shared normalizer, signature scan,
+    and feature extractor are ready. Never emits 'training-ready' from raw text.
+    Run prepare_raw_staging() to make auditable raw splits meanwhile.
     """
-    pass
+    from training.week1_staging import prepare_canonical_if_ready
+    prepare_canonical_if_ready(Path(raw_dir), Path(output_dir))
+
 
 
 def main() -> None:
