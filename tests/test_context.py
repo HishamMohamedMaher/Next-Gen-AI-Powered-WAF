@@ -2,7 +2,6 @@
 
 import pytest
 from starlette.requests import Request
-
 from waf.context import build_context
 
 
@@ -76,8 +75,6 @@ async def test_build_from_post_form():
 
 @pytest.mark.asyncio
 async def test_invalid_json_body():
-    # القرار المطلوب من الفريق: يرمي HTTPException ولا يفتح (fail-open)؟
-    # هنا بنفترض fail-open: الـ body الخام بيتحفظ والحقول فاضية.
     body = b'{"bad_json": invalid}'
     req = make_request(
         method="POST", path="/api/data",
@@ -91,7 +88,6 @@ async def test_invalid_json_body():
 
 @pytest.mark.asyncio
 async def test_body_size_limit(monkeypatch):
-    # الحد في waf.context.MAX_BODY_SIZE، فبنصغّره للاختبار
     monkeypatch.setattr("waf.context.MAX_BODY_SIZE", 100)
     req = make_request(
         method="POST", path="/upload",
