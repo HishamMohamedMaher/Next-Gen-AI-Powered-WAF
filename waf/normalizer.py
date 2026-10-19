@@ -15,8 +15,7 @@ from dataclasses import dataclass
 import html
 import re
 import unicodedata
-import urllib.parse
-from typing import Any, Dict, Tuple
+from typing import  Dict
 
 from waf.models import RequestContext
 
