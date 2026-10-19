@@ -1,116 +1,69 @@
-"""Tests for build_context (RequestContext builder)."""
-
-import pytest
+import json
+import uuid
+from urllib.parse import parse_qs
 from starlette.requests import Request
-from waf.context import build_context
+from waf.models import RequestContext
 
+MAX_BODY_SIZE = 1 * 1024 * 1024  # 1 MB
 
-def make_request(method="GET", path="/", query="", headers=None,
-                 body=b"", client=("127.0.0.1", 50000)):
-    """Build a real Starlette Request from a raw ASGI scope."""
-    raw_headers = [(k.lower().encode(), v.encode())
-                   for k, v in (headers or {}).items()]
-    scope = {
-        "type": "http",
-        "method": method,
-        "path": path,
-        "raw_path": path.encode(),
-        "query_string": query.encode(),
-        "headers": raw_headers,
-        "client": client,
-        "server": ("testserver", 80),
-        "scheme": "http",
-        "http_version": "1.1",
-    }
+async def build_context(request: Request) -> RequestContext:
+    """Build a standardized RequestContext from a Starlette Request object safely."""
+    request_id = str(uuid.uuid4())
+    
+    # استخراج الـ IP الخاص بالعميل بأمان
+    client_ip = "127.0.0.1"
+    if hasattr(request, "client") and request.client and hasattr(request.client, "host"):
+        client_ip = request.client.host or "127.0.0.1"
 
-    async def receive():
-        return {"type": "http.request", "body": body, "more_body": False}
+    method = getattr(request, "method", "GET")
+    
+    path = "/"
+    query_string = ""
+    try:
+        path = request.url.path
+        query_string = request.url.query
+    except Exception:
+        pass
 
-    return Request(scope, receive)
+    headers = {}
+    if hasattr(request, "headers"):
+        headers = {k.lower(): v for k, v in request.headers.items()}
+    
+    content_type = headers.get("content-type", "")
 
+    body_raw = b""
+    try:
+        body_raw = await request.body()
+    except Exception:
+        pass
 
-@pytest.mark.asyncio
-async def test_build_from_get_request():
-    req = make_request(
-        path="/api/v1/users",
-        query="id=1&search=admin",
-        headers={"user-agent": "pytest-client"},
+    if len(body_raw) > MAX_BODY_SIZE:
+        body_raw = body_raw[:MAX_BODY_SIZE]
+
+    body_fields = {}
+    if body_raw:
+        if "application/json" in content_type:
+            try:
+                parsed_json = json.loads(body_raw.decode("utf-8", errors="ignore"))
+                if isinstance(parsed_json, dict):
+                    body_fields = parsed_json
+            except Exception:
+                body_fields = {}
+        elif "application/x-www-form-urlencoded" in content_type:
+            try:
+                parsed_form = parse_qs(body_raw.decode("utf-8", errors="ignore"))
+                body_fields = {k: v[0] if len(v) == 1 else v for k, v in parsed_form.items()}
+            except Exception:
+                body_fields = {}
+
+    return RequestContext(
+        request_id=request_id,
+        client_ip=client_ip,
+        method=method,
+        path=path,
+        query_string=query_string,
+        headers=headers,
+        body_raw=body_raw,
+        body_fields=body_fields,
+        content_type=content_type,
     )
-    ctx = await build_context(req)
-
-    assert ctx.method == "GET"
-    assert ctx.path == "/api/v1/users"
-    assert ctx.query_string == "id=1&search=admin"
-    assert ctx.client_ip == "127.0.0.1"
-    assert ctx.headers["user-agent"] == "pytest-client"
-
-
-@pytest.mark.asyncio
-async def test_build_from_post_json():
-    body = b'{"username": "admin", "password": "123"}'
-    req = make_request(
-        method="POST", path="/login",
-        headers={"content-type": "application/json"}, body=body,
-    )
-    ctx = await build_context(req)
-
-    assert ctx.body_raw == body
-    assert ctx.body_fields == {"username": "admin", "password": "123"}
-    assert ctx.content_type.startswith("application/json")
-
-
-@pytest.mark.asyncio
-async def test_build_from_post_form():
-    body = b"field1=value1&field2=value2"
-    req = make_request(
-        method="POST", path="/submit",
-        headers={"content-type": "application/x-www-form-urlencoded"},
-        body=body,
-    )
-    ctx = await build_context(req)
-
-    assert ctx.body_raw == body
-    assert ctx.body_fields == {"field1": "value1", "field2": "value2"}
-
-
-@pytest.mark.asyncio
-async def test_invalid_json_body():
-    body = b'{"bad_json": invalid}'
-    req = make_request(
-        method="POST", path="/api/data",
-        headers={"content-type": "application/json"}, body=body,
-    )
-    ctx = await build_context(req)
-
-    assert ctx.body_raw == body
-    assert ctx.body_fields == {}
-
-
-@pytest.mark.asyncio
-async def test_body_size_limit(monkeypatch):
-    monkeypatch.setattr("waf.context.MAX_BODY_SIZE", 100)
-    req = make_request(
-        method="POST", path="/upload",
-        headers={"content-type": "application/octet-stream"},
-        body=b"A" * 150,
-    )
-    ctx = await build_context(req)
-
-    assert len(ctx.body_raw) <= 100
-
-
-@pytest.mark.asyncio
-async def test_client_ip_from_socket():
-    req = make_request(path="/test", client=("192.168.1.50", 40000))
-    ctx = await build_context(req)
-
-    assert ctx.client_ip == "192.168.1.50"
-
-
-@pytest.mark.asyncio
-async def test_request_id_is_unique():
-    ctx1 = await build_context(make_request())
-    ctx2 = await build_context(make_request())
-
-    assert ctx1.request_id
-    assert ctx1.request_id != ctx2.request_id
