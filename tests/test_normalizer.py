@@ -10,8 +10,8 @@ from waf.normalizer import (
     _extract_mysql_conditional_comments,
     _iterative_url_decode,
     _normalize_unicode,
-    _strip_comments,
-    _strip_null_bytes,
+    _strip_sql_comments,
+    _strip_null_bytes_and_whitespace,
     _to_lowercase,
     normalize_context,
     normalize_text,
@@ -64,15 +64,15 @@ def test_unicode_nfkc():
 
 def test_null_byte_removal():
     """Verify that null bytes (\\x00) are stripped from the payload."""
-    assert _strip_null_bytes("file.png\x00.php") == "file.png.php"
-    assert _strip_null_bytes("test%00") == "test"
-    assert _strip_null_bytes("test\\0") == "test"
+    assert _strip_null_bytes_and_whitespace("file.png\x00.php") == "file.png.php"
+    assert _strip_null_bytes_and_whitespace("test%00") == "test"
+    assert _strip_null_bytes_and_whitespace("test\\0") == "test"
 
 
 def test_sql_comment_to_space():
     """Verify SQL inline comment replacement: /**/ becomes whitespace."""
-    assert _strip_comments("SELECT/**/1") == "SELECT 1"
-    assert _strip_comments("UNION/*comment*/SELECT") == "UNION SELECT"
+    assert _strip_sql_comments("SELECT/**/1") == "SELECT 1"
+    assert _strip_sql_comments("UNION/*comment*/SELECT") == "UNION SELECT"
 
 
 def test_conditional_comment_extract():

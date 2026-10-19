@@ -68,7 +68,7 @@ def _normalize_unicode(text: str) -> str:
     return unicodedata.normalize("NFKC", text)
 
 
-def _strip_null_bytes(text: str) -> str:
+def _strip_null_bytes_and_whitespace(text: str) -> str:
     """Remove null bytes and null-byte representations from text."""
     if not text:
         return ""
@@ -78,7 +78,7 @@ def _strip_null_bytes(text: str) -> str:
 
 import re
 
-def _strip_comments(text: str) -> str:
+def _strip_sql_comments(text: str) -> str:
     """Replace SQL inline comments (/* ... */) with a single space."""
     if not text:
         return ""
@@ -112,9 +112,9 @@ def normalize_text(text: str) -> NormalizedResult:
 
     current = _normalize_unicode(current)
 
-    current = _strip_null_bytes(current)
+    current = _strip_null_bytes_and_whitespace(current)
 
-    current = _strip_comments(current)
+    current = _strip_sql_comments(current)
 
     current = _extract_mysql_conditional_comments(current)
 
