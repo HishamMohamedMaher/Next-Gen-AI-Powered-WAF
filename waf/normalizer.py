@@ -72,7 +72,7 @@ def _strip_null_bytes(text: str) -> str:
     """Remove null bytes and null-byte representations from text."""
     if not text:
         return ""
-    text = text.replace("\x00", "").replace("%00", "").replace("\\0", "") # replace(\u0000 , "")
+    text = text.replace("\x00", "").replace("%00", "").replace("\\0", "") 
    
     return text
 
