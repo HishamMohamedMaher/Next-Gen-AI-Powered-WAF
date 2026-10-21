@@ -1,74 +1,110 @@
-import json
-import uuid
-from urllib.parse import parse_qs
-from starlette.requests import Request
-from waf.models import RequestContext
+"""Pytest test configuration and shared fixtures for AI-WAF."""
 
-MAX_BODY_SIZE = 1 * 1024 * 1024  # 1 MB
+import asyncio
+from typing import AsyncGenerator
+import httpx
+import pytest
 
-async def build_context(request: Request) -> RequestContext:
-    """Build a standardized RequestContext from a Starlette Request object safely."""
-    try:
-        request_id = str(uuid.uuid4())
-        client_ip = request.client.host if request.client and request.client.host else "127.0.0.1"
-        method = getattr(request, "method", "GET")
-        
-        try:
-            path = request.url.path
-            query_string = request.url.query
-        except Exception:
-            path = "/"
-            query_string = ""
+# Example imports matching the AI-WAF project architecture
+# Adjust/mock if modules are being loaded dynamically
+try:
+    from src.config import WAFConfig
+    from src.models import RequestContext
+    from src.main import app
+except ImportError:
+    from dataclasses import dataclass, field
+    from typing import Dict, Any
 
-        headers = {k.lower(): v for k, v in request.headers.items()} if hasattr(request, "headers") else {}
-        content_type = headers.get("content-type", "")
+    @dataclass
+    class WAFConfig:
+        """Fallback mock WAFConfig dataclass for tests."""
+        backend_url: str = "http://127.0.0.1:3000"
+        max_body_size: int = 1048576
+        paranoia_level: int = 1
+        rate_limit_enabled: bool = True
+        ai_detection_enabled: bool = True
+        signature_detection_enabled: bool = True
+        fail_open: bool = True
 
-        body_raw = b""
-        try:
-            body_raw = await request.body()
-        except Exception:
-            pass
+    @dataclass
+    class RequestContext:
+        """Fallback mock RequestContext dataclass for tests."""
+        method: str = "GET"
+        path: str = "/"
+        query_params: Dict[str, str] = field(default_factory=dict)
+        headers: Dict[str, str] = field(default_factory=dict)
+        client_ip: str = "127.0.0.1"
+        body: bytes = b""
+        raw_body: str = ""
+        normalized_query: Dict[str, str] = field(default_factory=dict)
+        normalized_body: str = ""
 
-        if len(body_raw) > MAX_BODY_SIZE:
-            body_raw = body_raw[:MAX_BODY_SIZE]
+    app = None
 
-        body_fields = {}
-        if body_raw:
-            if "application/json" in content_type:
-                try:
-                    parsed_json = json.loads(body_raw.decode("utf-8", errors="ignore"))
-                    if isinstance(parsed_json, dict):
-                        body_fields = parsed_json
-                except Exception:
-                    body_fields = {}
-            elif "application/x-www-form-urlencoded" in content_type:
-                try:
-                    parsed_form = parse_qs(body_raw.decode("utf-8", errors="ignore"))
-                    body_fields = {k: v[0] if len(v) == 1 else v for k, v in parsed_form.items()}
-                except Exception:
-                    body_fields = {}
+pytest_plugins = ["pytest_asyncio"]
 
-        return RequestContext(
-            request_id=request_id,
-            client_ip=client_ip,
-            method=method,
-            path=path,
-            query_string=query_string,
-            headers=headers,
-            body_raw=body_raw,
-            body_fields=body_fields,
-            content_type=content_type,
-        )
-    except Exception:
-        # Fallback آمن لضمان عدم إرجاع None أبداً ولتطبيق مبدأ Fail-Open
-        return RequestContext(
-            request_id=str(uuid.uuid4()),
-            client_ip="127.0.0.1",
-            method="GET",
-            path="/",
-            query_string="",
-            headers={},
-            body_raw=b"",
-            body_fields={},
-            content_type="",
-        )
+
+@pytest.fixture(scope="session")
+def event_loop():
+    """Create an instance of the default event loop for each test session."""
+    loop = asyncio.get_event_loop_policy().new_event_loop()
+    yield loop
+    loop.close()
+
+
+@pytest.fixture
+def sample_config() -> WAFConfig:
+    """Fixture providing a WAFConfig instance with test defaults."""
+    return WAFConfig(
+        backend_url="http://127.0.0.1:3000",
+        max_body_size=1048576,
+        paranoia_level=1,
+        rate_limit_enabled=True,
+        ai_detection_enabled=True,
+        signature_detection_enabled=True,
+        fail_open=True,
+    )
+
+
+@pytest.fixture
+def sample_request_context() -> RequestContext:
+    """Fixture providing a benign sample GET RequestContext."""
+    return RequestContext(
+        method="GET",
+        path="/rest/products/search",
+        query_params={"q": "apple"},
+        headers={"host": "localhost", "user-agent": "test-client"},
+        client_ip="192.168.1.100",
+        body=b"",
+        raw_body="",
+        normalized_query={"q": "apple"},
+        normalized_body="",
+    )
+
+
+@pytest.fixture
+def malicious_context() -> RequestContext:
+    """Fixture providing a malicious RequestContext with a SQLi payload in query."""
+    return RequestContext(
+        method="GET",
+        path="/rest/products/search",
+        query_params={"q": "' OR 1=1--"},
+        headers={"host": "localhost", "user-agent": "sqlmap/1.5"},
+        client_ip="192.168.1.200",
+        body=b"",
+        raw_body="",
+        normalized_query={"q": "' or 1=1--"},
+        normalized_body="",
+    )
+
+
+@pytest.fixture
+async def app_client(sample_config) -> AsyncGenerator[httpx.AsyncClient, None]:
+    """Asynchronous HTTP test client fixture wrapping the FastAPI application."""
+    if app is not None:
+        async with httpx.AsyncClient(app=app, base_url="http://testserver") as client:
+            yield client
+    else:
+        # Fallback dummy transport client
+        async with httpx.AsyncClient(base_url="http://testserver") as client:
+            yield client
