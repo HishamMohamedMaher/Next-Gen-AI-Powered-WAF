@@ -37,7 +37,8 @@ def _is_private(ip: str) -> bool:
     Returns:
         True if the IP is within a private/reserved subnet, False otherwise.
     """
-    pass
+    address=ipaddress.ip_address(ip)
+    return not address.is_global
 
 
 def _cache_get(ip: str) -> Optional[Dict[str, Any]]:
@@ -50,7 +51,14 @@ def _cache_get(ip: str) -> Optional[Dict[str, Any]]:
         A dictionary containing cached reputation data if available and fresh,
         or None if missing or expired.
     """
-    pass
+    import json
+    from waf import db
+    record=db.get_abuseipdb_cache(ip,max_age_hours=24)
+    if not record:return None
+    try:
+        result=json.loads(record['raw_response'])
+    except (ValueError,TypeError,KeyError):return None
+    return result if isinstance(result,dict) else None
 
 
 def _cache_set(ip: str, result: Dict[str, Any]) -> None:
@@ -60,7 +68,14 @@ def _cache_set(ip: str, result: Dict[str, Any]) -> None:
         ip: The target IP address.
         result: The lookup payload containing abuse score and metadata.
     """
-    pass
+    import json
+    from waf import db
+    if not isinstance(result,dict):raise TypeError('Expected dictionary')
+    score=result.get('abuseConfidenceScore',0)
+    if isinstance(score,bool) or not isinstance(score,(int,float)) or not 0<=score<=100:
+        raise ValueError('Invalid abuse confidence score')
+    db.cache_abuseipdb(ip,int(score),json.dumps(result,ensure_ascii=False))
+    return None
 
 
 def lookup(ip: str) -> Optional[Dict[str, Any]]:
@@ -77,4 +92,29 @@ def lookup(ip: str) -> Optional[Dict[str, Any]]:
         A dictionary containing threat details (e.g., abuseConfidenceScore,
         countryCode, usageType, totalReports), or None for private IPs or failed queries.
     """
-    pass
+    import json, urllib.request, urllib.parse
+    try:
+        if _is_private(ip):return None
+    except ValueError:return None
+    try:
+        result=_cache_get(ip)
+        if result is not None:return result
+    except Exception as exc:
+        logger.warning('Threat cache read failed: %s',type(exc).__name__)
+    api_key=os.environ.get('ABUSEIPDB_API_KEY','').strip()
+    if not api_key:return None
+    url=ABUSEIPDB_URL+'?'+urllib.parse.urlencode({'ipAddress':ip,'maxAgeInDays':90})
+    request=urllib.request.Request(url,headers={'Key':api_key,'Accept':'application/json'})
+    try:
+        with urllib.request.urlopen(request,timeout=2.0) as response:
+            raw=response.read(1024*1024)
+        envelope=json.loads(raw)
+        result=envelope.get('data') if isinstance(envelope,dict) else None
+        if not isinstance(result,dict):return None
+        if result.get('ipAddress')!=ip:return None
+        try:_cache_set(ip,result)
+        except Exception as exc:logger.warning('Threat cache write failed: %s',type(exc).__name__)
+        return result
+    except Exception as exc:
+        logger.warning('AbuseIPDB lookup failed: %s',type(exc).__name__)
+        return None

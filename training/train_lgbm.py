@@ -39,15 +39,23 @@ LGBM_PARAMS: Dict[str, Any] = {
 
 
 def load_splits(splits_dir: Union[str, Path]) -> Tuple[pd.DataFrame, pd.DataFrame]:
-    """Load train and validation splits from disk.
+    """Load verified canonical train and validation splits.
 
     Args:
-        splits_dir: Directory containing train.parquet and val.parquet splits.
+        splits_dir: Directory containing the canonical manifest and train/val CSVs.
 
     Returns:
         Tuple[pd.DataFrame, pd.DataFrame]: (train_df, val_df).
     """
-    pass
+    from training.train_lr import load_splits as load_canonical_splits
+
+    train_df, val_df = load_canonical_splits(splits_dir)
+    logger.warning(
+        "STRUCTURAL_FEATURES_PENDING: canonical text rows are validated, but "
+        "they do not provide the normalized RequestContext required by "
+        "waf.feature_extractor.extract"
+    )
+    return train_df, val_df
 
 
 def extract_features(df: pd.DataFrame, text_column: str = "payload") -> np.ndarray:
@@ -73,17 +81,84 @@ def train_lgbm(X_train: np.ndarray, y_train: Any) -> Any:
     Returns:
         LGBMClassifier: Trained LightGBM model.
     """
-    pass
+    if not hasattr(X_train, "shape") or len(X_train.shape) != 2:
+        raise ValueError("X_train must be a 2D feature matrix")
+
+    n_samples, n_features = X_train.shape
+    if n_samples < 2 or n_features < 1:
+        raise ValueError("Training matrix is empty or invalid")
+
+    labels = np.asarray(y_train)
+    if labels.ndim != 1:
+        raise ValueError("y_train must be one-dimensional")
+    if len(labels) != n_samples:
+        raise ValueError("Features and labels have different lengths")
+    if not np.isin(labels, [0, 1]).all():
+        raise ValueError("Labels must contain only binary values 0 and 1")
+    if set(labels.tolist()) != {0, 1}:
+        raise ValueError("Both benign and attack classes are required")
+
+    try:
+        finite = np.isfinite(np.asarray(X_train, dtype=float)).all()
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Training features must be numeric") from exc
+    if not finite:
+        raise ValueError("Training features contain NaN or infinity")
+
+    if LGBMClassifier is None:
+        raise ImportError(
+            "LightGBM is required to train this model; install the project-pinned "
+            "lightgbm dependency"
+        )
+
+    model = LGBMClassifier(**LGBM_PARAMS)
+    model.fit(X_train, labels.astype(int))
+    return model
 
 
 def save_model(model: Any, output_dir: Union[str, Path]) -> None:
-    """Serialize and save the trained LightGBM model to disk.
+    """Validate and save a trained LightGBM model when checksum format is defined.
 
     Args:
         model: Trained LightGBM model instance.
-        output_dir: Destination directory where model will be saved.
+        output_dir: Destination directory for the model and its integrity metadata.
+
+    Raises:
+        RuntimeError: If model validation or the checksum metadata contract blocks saving.
     """
-    pass
+    if LGBMClassifier is None:
+        raise RuntimeError(
+            "LightGBM is unavailable, so the model type and fitted state "
+            "cannot be validated"
+        )
+    if not isinstance(model, LGBMClassifier):
+        raise TypeError("Expected a LightGBM LGBMClassifier model")
+    if (
+        not hasattr(model, "booster_")
+        or not callable(getattr(model, "predict", None))
+        or not callable(getattr(model, "predict_proba", None))
+    ):
+        raise ValueError("LightGBM model is not fitted or lacks prediction methods")
+
+    destination = Path(output_dir)
+    artifact = destination / "model_lgbm.pkl"
+    checksum_sidecar = destination / "model_lgbm.pkl.sha256"
+    if (
+        artifact.exists()
+        or artifact.is_symlink()
+        or checksum_sidecar.exists()
+        or checksum_sidecar.is_symlink()
+    ):
+        raise FileExistsError(
+            f"LightGBM artifact or checksum already exists in {destination}"
+        )
+
+    raise RuntimeError(
+        "LIGHTGBM_CHECKSUM_CONTRACT_PENDING: the LR consumer requires exactly "
+        "three entries in checksums.sha256, while the LightGBM consumer only "
+        "documents an adjacent .sha256 file without defining its format; "
+        "refusing to serialize an artifact with incompatible or ambiguous metadata"
+    )
 
 
 def main() -> None:
