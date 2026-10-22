@@ -44,12 +44,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     - Flushes remaining pending security events in the queue.
     """
     # Startup sequence
-    pass
+    logger.info("Initializing HTTPX Client...")
+    await init_client()
     try:
         yield
     finally:
         # Shutdown sequence
-        pass
+        logger.info("Closing HTTPX Client...")
+        await close_client()
 
 
 app = FastAPI(
@@ -81,4 +83,17 @@ async def catch_all(request: Request, path: str) -> Response:
     Returns:
         Upstream Response if allowed, or JSONResponse (403 Forbidden) if blocked.
     """
-    pass
+    # Temporary Day 1 implementation to verify the gateway is receiving traffic
+    ctx = RequestContext(
+        method=request.method,
+        path=request.url.path,
+        client_ip=request.client.host if request.client else "127.0.0.1",
+        request_id="test-id-123"
+    )
+    
+    return JSONResponse(content={
+        "status": "success",
+        "message": "AI-WAF Core Gateway is actively listening on port 8080!",
+        "intercepted_path": ctx.path,
+        "method": ctx.method
+    })

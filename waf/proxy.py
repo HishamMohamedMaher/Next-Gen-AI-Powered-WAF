@@ -31,12 +31,18 @@ _client: Optional[httpx.AsyncClient] = None
 
 async def init_client() -> None:
     """Initialize the global httpx.AsyncClient instance with connection pooling."""
-    pass
+    global _client
+    _client = httpx.AsyncClient(
+        limits=httpx.Limits(max_keepalive_connections=50, max_connections=200)
+    )
 
 
 async def close_client() -> None:
     """Close the global httpx.AsyncClient instance cleanly."""
-    pass
+    global _client
+    if _client is not None:
+        await _client.aclose()
+        _client = None
 
 
 async def forward(request: Request, ctx: RequestContext) -> Response:
