@@ -97,24 +97,30 @@ def init_db(db_path: str = DB_PATH) -> None:
     """Initialize SQLite database connections, enable WAL mode, and create tables with indexes."""
     global _write_conn, _read_conn
 
-    os.makedirs(os.path.dirname(db_path), exist_ok=True)
+    # Ensure parent directory exists
+    dir_name = os.path.dirname(db_path)
+    if dir_name:
+        os.makedirs(dir_name, exist_ok=True)
 
+    # Initialize write connection and enable WAL
     _write_conn = sqlite3.connect(db_path, check_same_thread=False)
     _write_conn.row_factory = sqlite3.Row
 
     _write_conn.execute("PRAGMA journal_mode=WAL;")
     _write_conn.execute("PRAGMA busy_timeout=5000;")
 
-    _read_conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, check_same_thread=False)
-    _read_conn.row_factory = sqlite3.Row
-    _read_conn.execute("PRAGMA busy_timeout=5000;")
-
+    # Execute Schemas
     cursor = _write_conn.cursor()
     cursor.executescript(SCHEMA_WAF_EVENTS)
     cursor.executescript(SCHEMA_ALERTS)
     cursor.executescript(SCHEMA_BLACKLIST)
     cursor.executescript(SCHEMA_ABUSEIPDB_CACHE)
     _write_conn.commit()
+
+    # Initialize dedicated read-only connection
+    _read_conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, check_same_thread=False)
+    _read_conn.row_factory = sqlite3.Row
+    _read_conn.execute("PRAGMA busy_timeout=5000;")
 
     logger.info(f"Database initialized successfully at {db_path} with WAL mode.")
 
@@ -243,7 +249,7 @@ def cache_abuseipdb(ip: str, score: int, raw_response: str) -> None:
     if not _write_conn:
         return
 
-    now = datetime.datetime.utcnow().isoformat()
+    now = datetime.datetime.now(datetime.timezone.utc).isoformat()
     query = """
     INSERT INTO abuseipdb_cache (ip, abuse_confidence_score, raw_response, cached_at)
     VALUES (?, ?, ?, ?)
@@ -276,7 +282,11 @@ def get_abuseipdb_cache(ip: str, max_age_hours: int = 24) -> Optional[Dict[str, 
 
     record = dict(row)
     cached_time = datetime.datetime.fromisoformat(record["cached_at"])
-    if datetime.datetime.utcnow() - cached_time > datetime.timedelta(hours=max_age_hours):
+    if cached_time.tzinfo is None:
+        cached_time = cached_time.replace(tzinfo=datetime.timezone.utc)
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+    if now - cached_time > datetime.timedelta(hours=max_age_hours):
         return None
 
     return record
