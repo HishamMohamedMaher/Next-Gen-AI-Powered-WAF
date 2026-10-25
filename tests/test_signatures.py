@@ -160,3 +160,10 @@ def test_scan_normalized_and_original():
     assert hit_raw is not None
     assert hit_raw.rule_id == "TRAV-005"
     assert hit_raw.matched_field == "query"
+
+
+
+'''
+commands to test : 
+    pytest tests/test_signatures.py -v
+'''
