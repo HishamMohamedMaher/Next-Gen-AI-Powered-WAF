@@ -22,6 +22,8 @@ services:
       dockerfile: Dockerfile.waf
     ports:
       - '8080:8080'
+    environment:
+      - BACKEND_URL=http://juiceshop:3000
     networks:
       - waf-internal
       - waf-external
