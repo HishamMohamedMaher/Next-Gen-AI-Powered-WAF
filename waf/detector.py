@@ -17,13 +17,11 @@ import waf.signatures as signatures
 
 logger = logging.getLogger("ai_waf.detector")
 
-# Static file extensions loaded from configuration defaults
 STATIC_EXTENSIONS: Tuple[str, ...] = (
     ".css", ".js", ".jpg", ".jpeg", ".png", ".gif",
     ".svg", ".ico", ".woff", ".woff2", ".ttf", ".eot",
 )
 
-# Day 10: LRU Cache Dictionary to save CPU on repeated normalized inputs
 _ai_cache = collections.OrderedDict()
 MAX_CACHE_SIZE = 10000
 
@@ -33,7 +31,6 @@ def _get_ai_score_lru(payload_hash: str, ctx: RequestContext) -> float:
         _ai_cache.move_to_end(payload_hash)
         return _ai_cache[payload_hash]
     
-    # Assuming ai_engine.predict() takes the context and returns a float score
     score = ai_engine.predict(ctx) 
     
     _ai_cache[payload_hash] = score
@@ -42,20 +39,16 @@ def _get_ai_score_lru(payload_hash: str, ctx: RequestContext) -> float:
     
     return score
 
-
 def is_static_file(path: str) -> bool:
     """Check if the requested path corresponds to a static web asset."""
     path_lower = path.lower()
     return path_lower.endswith(STATIC_EXTENSIONS)
 
-
 def detect(ctx: RequestContext) -> DetectionResult:
     """Evaluate an incoming HTTP request through the multi-layer WAF detection pipeline."""
-    # Day 11: Start tracking execution latency
     start_time = time.time()
 
     def finalize(action: Action, layer: Layer, attack_type: AttackType, confidence: float, reason: str) -> DetectionResult:
-        """Helper to build DetectionResult with the measured latency."""
         latency_ms = (time.time() - start_time) * 1000.0
         return DetectionResult(
             action=action,
@@ -66,34 +59,44 @@ def detect(ctx: RequestContext) -> DetectionResult:
             processing_time_ms=latency_ms
         )
 
+    try:
+        config = get_config()
+    except Exception:
+        logger.exception("Failed to load config - falling back to fail-open defaults")
+        class FallbackConfig:
+            whitelist_ips = []
+            blacklist_ips = []
+            skip_static = True
+            ai_monitor_threshold = 0.5
+            ai_block_threshold = 0.85
+        config = FallbackConfig()
+
     # 1. Whitelist evaluation
     try:
-        whitelist = get_config("whitelist_ips", [])
-        if whitelist and ctx.client_ip in whitelist:
-            return finalize(Action.ALLOW, Layer.NETWORK, AttackType.NONE, 1.0, "IP Whitelisted")
+        if hasattr(config, "whitelist_ips") and config.whitelist_ips and ctx.client_ip in config.whitelist_ips:
+            return finalize(Action.ALLOW, Layer.WHITELIST, AttackType.UNKNOWN, 1.0, "IP Whitelisted")
     except Exception:
         logger.exception("Whitelist evaluation failed - failing open")
 
     # 2. Blacklist evaluation
     try:
-        blacklist = get_config("blacklist_ips", [])
-        if blacklist and ctx.client_ip in blacklist:
-            return finalize(Action.BLOCK, Layer.NETWORK, AttackType.BLACKLIST, 1.0, "IP Blacklisted")
+        if hasattr(config, "blacklist_ips") and config.blacklist_ips and ctx.client_ip in config.blacklist_ips:
+            return finalize(Action.BLOCK, Layer.BLACKLIST, AttackType.BLACKLISTED_IP, 1.0, "IP Blacklisted")
     except Exception:
         logger.exception("Blacklist evaluation failed - failing open")
 
     # 3. Rate limiter evaluation
     try:
-        # Assumes rate_limiter.check returns False if limit is exceeded
         if hasattr(rate_limiter, 'check') and not rate_limiter.check(ctx.client_ip):
-            return finalize(Action.BLOCK, Layer.NETWORK, AttackType.RATE_LIMIT, 1.0, "Rate limit exceeded")
+            return finalize(Action.BLOCK, Layer.RATE_LIMIT, AttackType.RATE_LIMIT, 1.0, "Rate limit exceeded")
     except Exception:
         logger.exception("Rate limiter evaluation failed - failing open")
 
-    # 4. Static asset check (Day 7)
+    # 4. Static asset check
     try:
-        if get_config("skip_static", True) and is_static_file(ctx.path):
-            return finalize(Action.ALLOW, Layer.STATIC, AttackType.NONE, 1.0, "Static asset bypass")
+        skip_static = getattr(config, "skip_static", True)
+        if skip_static and is_static_file(ctx.path):
+            return finalize(Action.ALLOW, Layer.NONE, AttackType.UNKNOWN, 1.0, "Static asset bypass")
     except Exception:
         logger.exception("Static asset evaluation failed - failing open")
 
@@ -103,26 +106,23 @@ def detect(ctx: RequestContext) -> DetectionResult:
     except Exception:
         logger.exception("Payload normalization failed - failing open")
 
-    # 6. Deterministic signature scanning (Day 7)
+    # 6. Deterministic signature scanning
     try:
-        # Assumes signatures.check returns the matched rule name or None
-        sig_match = signatures.check(ctx)
+        sig_match = signatures.scan(ctx)
         if sig_match:
-            return finalize(Action.BLOCK, Layer.SIGNATURE, AttackType.SIGNATURE, 1.0, f"Signature match: {sig_match}")
+            return finalize(Action.BLOCK, Layer.SIGNATURE, sig_match.attack_type, 1.0, f"Signature match: {sig_match.rule_id}")
     except Exception:
         logger.exception("Signature scanning failed - failing open")
 
-    # 7. Machine learning inference with LRU Cache (Days 9 & 10)
+    # 7. Machine learning inference with LRU Cache
     try:
-        # Create a deterministic hash from the normalized inputs for the cache
-        payload_str = f"{ctx.path}|{ctx.query_string}|{ctx.body_fields}"
+        payload_str = f"{ctx.path}|{ctx.query_string}|{getattr(ctx, 'body_fields', '')}"
         payload_hash = hashlib.sha256(payload_str.encode('utf-8', errors='ignore')).hexdigest()
 
         ai_score = _get_ai_score_lru(payload_hash, ctx)
 
-        # Apply Thresholds (Day 9)
-        monitor_thresh = get_config("ai_monitor_threshold", 0.5)
-        block_thresh = get_config("ai_block_threshold", 0.85)
+        monitor_thresh = getattr(config, "ai_monitor_threshold", 0.5)
+        block_thresh = getattr(config, "ai_block_threshold", 0.85)
 
         if ai_score >= block_thresh:
             final_action = Action.BLOCK
@@ -131,10 +131,9 @@ def detect(ctx: RequestContext) -> DetectionResult:
         else:
             final_action = Action.ALLOW
 
-        return finalize(final_action, Layer.AI, AttackType.ANOMALY, ai_score, f"AI Score: {ai_score:.3f}")
+        return finalize(final_action, Layer.AI, AttackType.UNKNOWN, ai_score, f"AI Score: {ai_score:.3f}")
     
     except Exception:
         logger.exception("AI engine inference failed - failing open")
 
-    # Ultimate Fallback (Fail-Open) if everything somehow falls through
-    return finalize(Action.ALLOW, Layer.SYSTEM, AttackType.NONE, 0.0, "Pipeline fallthrough (Fail-Open)")
+    return finalize(Action.ALLOW, Layer.NONE, AttackType.UNKNOWN, 0.0, "Pipeline fallthrough (Fail-Open)")
