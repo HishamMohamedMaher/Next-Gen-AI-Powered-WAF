@@ -68,6 +68,9 @@ async def forward(request: Request, ctx: RequestContext) -> Response:
 
     clean_headers = {k: v for k, v in ctx.headers.items() if k.lower() not in _STRIP_FROM_REQUEST}
 
+    # Force identity encoding to prevent backend compression issues
+    clean_headers["accept-encoding"] = "identity"
+
     prior = ctx.headers.get("x-forwarded-for")
     clean_headers["x-forwarded-for"] = f"{prior}, {ctx.client_ip}" if prior else ctx.client_ip
 
@@ -85,5 +88,10 @@ async def forward(request: Request, ctx: RequestContext) -> Response:
         logger.error("Upstream failed: %s: %s | url=%s", type(exc).__name__, exc, target_url)
         return Response(content="502 Bad Gateway: Backend is unreachable", status_code=502)
 
-    resp_headers = {k: v for k, v in upstream_resp.headers.items() if k.lower() not in _STRIP_FROM_RESPONSE}
+    # Strictly strip content-encoding and content-length case-insensitively
+    resp_headers = {
+        k: v for k, v in upstream_resp.headers.items() 
+        if k.lower() not in _STRIP_FROM_RESPONSE
+    }
+
     return Response(content=upstream_resp.content, status_code=upstream_resp.status_code, headers=resp_headers)
