@@ -9,6 +9,7 @@ from fastapi import FastAPI, Request, Response
 from waf.context import build_context
 from waf.normalizer import normalize_context
 from waf.proxy import close_client, forward, init_client
+import waf.ai_engine as ai_engine  # Added import for Step 3
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("ai_waf")
@@ -17,6 +18,12 @@ logger = logging.getLogger("ai_waf")
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info("Initializing HTTPX Client...")
     await init_client()
+    
+    # Step 3: Load AI models and execute warmup sequence
+    logger.info("Loading AI models and warming up...")
+    ai_engine.load_models()
+    ai_engine.warmup()
+    
     try:
         yield
     finally:
@@ -27,6 +34,6 @@ app = FastAPI(title="AI-WAF Security Gateway", version="1.0.0", lifespan=lifespa
 
 @app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"])
 async def catch_all(request: Request, path: str) -> Response:
-      ctx = await build_context(request)
-      ctx = normalize_context(ctx) 
-      return await forward(request, ctx)
+    ctx = await build_context(request)
+    ctx = normalize_context(ctx) 
+    return await forward(request, ctx)
