@@ -174,7 +174,6 @@ def scan(ctx: RequestContext, paranoia_level: int = 1) -> Optional[SignatureHit]
 
     fields_to_scan: List[tuple[str, str]] = []
 
-    # 1. الحقول المطبّعة أولاً (Normalized Fields)
     if getattr(ctx, "path_normalized", ""):
         fields_to_scan.append(("path_normalized", ctx.path_normalized))
     if getattr(ctx, "query_normalized", ""):
@@ -185,7 +184,6 @@ def scan(ctx: RequestContext, paranoia_level: int = 1) -> Optional[SignatureHit]
             if v:
                 fields_to_scan.append((f"body_normalized.{k}", str(v)))
 
-    # 2. الحقول الأصلية الخام ثانياً (Original Fields)
     if getattr(ctx, "path", ""):
         fields_to_scan.append(("path", ctx.path))
     if getattr(ctx, "query_string", ""):

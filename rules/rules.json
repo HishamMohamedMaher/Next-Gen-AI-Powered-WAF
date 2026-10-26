@@ -5,7 +5,7 @@
       "id": "SQLI-001",
       "category": "sqli",
       "name": "SQL Tautology OR/AND 1=1 Pattern",
-      "pattern": "(?i)\\b(or|and)\\b\\s+['\"]?\\d+['\"]?\\s*=\\s*['\"]?\\d+",
+      "pattern": "(?i)\\b(?:or|and)\\b\\s+['\"]?\\d+['\"]?\\s*=\\s*['\"]?\\d+",
       "severity": "high",
       "paranoia_level": 1,
       "targets": ["query", "body", "path"],
