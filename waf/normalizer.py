@@ -114,9 +114,8 @@ def normalize_text(text: str) -> NormalizedResult:
 
     current = _strip_null_bytes_and_whitespace(current)
 
-    current = _strip_sql_comments(current)
-
     current = _extract_mysql_conditional_comments(current)
+    current = _strip_sql_comments(current)
 
     current = _to_lowercase(current)
     current = re.sub(r"\s+", " ", current).strip()
