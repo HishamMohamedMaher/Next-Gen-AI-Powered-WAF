@@ -15,8 +15,8 @@ st.title("📊 Traffic & Threat Overview")
 @st.fragment(run_every=timedelta(seconds=2))
 def render_overview():
     """Renders real-time metrics and charts from SQLite read-only connection."""
-    # 1. Top KPI metrics
-    counts = db_reader.get_event_counts(since=0)
+    # 1. Top KPI metrics (تم إضافة or {} لحماية الكود من رجوع قيمة None)
+    counts = db_reader.get_event_counts(since=0) or {}
     col1, col2, col3, col4 = st.columns(4)
     total = counts.get("total", 0)
     blocked = counts.get("blocked", 0)
@@ -34,7 +34,8 @@ def render_overview():
     left_col, right_col = st.columns(2)
     with left_col:
         st.subheader("Traffic Timeline")
-        timeline_data = db_reader.get_events_timeline(since=0, bucket_seconds=60)
+        # حماية ضد رجوع None
+        timeline_data = db_reader.get_events_timeline(since=0, bucket_seconds=60) or []
         if timeline_data:
             df_timeline = pd.DataFrame(timeline_data)
             fig_time = px.line(
@@ -51,7 +52,8 @@ def render_overview():
 
     with right_col:
         st.subheader("Attack Classification")
-        attacks_data = db_reader.get_attack_distribution(since=0)
+        # حماية ضد رجوع None
+        attacks_data = db_reader.get_attack_distribution(since=0) or []
         if attacks_data:
             df_attacks = pd.DataFrame(attacks_data)
             fig_pie = px.pie(
@@ -69,7 +71,8 @@ def render_overview():
 
     # 3. Top blocked IPs table
     st.subheader("Top Malicious IPs")
-    top_ips = db_reader.get_top_ips(since=0, limit=10)
+    # حماية ضد رجوع None
+    top_ips = db_reader.get_top_ips(since=0, limit=10) or []
     if top_ips:
         st.dataframe(pd.DataFrame(top_ips), use_container_width=True)
     else:

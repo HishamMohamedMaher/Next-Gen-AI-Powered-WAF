@@ -6,6 +6,8 @@ and interactive event auditing logs.
 
 from __future__ import annotations
 
+import os
+import sys
 import time
 from datetime import timedelta
 from typing import Any, Dict, List
@@ -15,7 +17,13 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
-from dashboard import db_reader
+# إضافة جذر المشروع تلقائياً لمسارات البحث لمنع ModuleNotFoundError عند الاستيراد
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
+try:
+    from dashboard import db_reader
+except ImportError:
+    import db_reader  # Fallback import محلي
 
 # Configure Streamlit page parameters
 st.set_page_config(
@@ -27,7 +35,8 @@ st.set_page_config(
 
 def render_header() -> None:
     """Render page title, status indicator, and descriptive subtitle."""
-    pass
+    st.title("🛡️ Next-Gen AI-WAF Security Operations Center")
+    st.markdown("لوحة مراقبة أمن المعلومات والتحكم اللحظي بالهجمات (Real-Time SOC Dashboard).")
 
 
 def render_metric_cards(event_counts: Dict[str, int]) -> None:
@@ -38,7 +47,20 @@ def render_metric_cards(event_counts: Dict[str, int]) -> None:
     Args:
         event_counts (dict[str, int]): Summary counts of traffic decisions.
     """
-    pass
+    total = event_counts.get("total", 0)
+    blocked = event_counts.get("blocked", 0)
+    allowed = event_counts.get("allowed", 0)
+    block_rate = (blocked / total * 100) if total > 0 else 0.0
+
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric(label="Total Requests", value=f"{total:,}")
+    with col2:
+        st.metric(label="Blocked Attacks", value=f"{blocked:,}", delta="Threats", delta_color="inverse")
+    with col3:
+        st.metric(label="Allowed Requests", value=f"{allowed:,}")
+    with col4:
+        st.metric(label="Block Rate", value=f"{block_rate:.2f}%")
 
 
 def render_timeline_chart(timeline_data: List[Dict[str, Any]]) -> None:
@@ -47,7 +69,13 @@ def render_timeline_chart(timeline_data: List[Dict[str, Any]]) -> None:
     Args:
         timeline_data (list[dict[str, Any]]): Time-bucketed traffic series.
     """
-    pass
+    if not timeline_data:
+        st.info("لا توجد بيانات زمنية كافية للعرض حالياً.")
+        return
+
+    df = pd.DataFrame(timeline_data)
+    fig = px.line(df, x="timestamp", y="count", color="action", markers=True, title="Traffic Trend Over Time")
+    st.plotly_chart(fig, use_container_width=True)
 
 
 def render_attack_distribution_chart(attack_data: List[Dict[str, Any]]) -> None:
@@ -56,7 +84,13 @@ def render_attack_distribution_chart(attack_data: List[Dict[str, Any]]) -> None:
     Args:
         attack_data (list[dict[str, Any]]): Frequency counts by attack classification.
     """
-    pass
+    if not attack_data:
+        st.info("لا توجد بيانات هجمات مسجلة للعرض.")
+        return
+
+    df = pd.DataFrame(attack_data)
+    fig = px.bar(df, x="attack_type", y="count", color="attack_type", title="Attack Categories Breakdown")
+    st.plotly_chart(fig, use_container_width=True)
 
 
 def render_top_ips_table(top_ips: List[Dict[str, Any]]) -> None:
@@ -65,30 +99,3 @@ def render_top_ips_table(top_ips: List[Dict[str, Any]]) -> None:
     Args:
         top_ips (list[dict[str, Any]]): Top blocked IP statistics.
     """
-    pass
-
-
-def render_events_explorer(since_timestamp: float) -> None:
-    """Render interactive telemetry events table with multi-dimensional filtering.
-
-    Provides filters for Action, Attack Type, Client IP, and Time Range.
-
-    Args:
-        since_timestamp (float): Initial time horizon filter in epoch seconds.
-    """
-    pass
-
-
-@st.fragment(run_every=timedelta(seconds=2))
-def dashboard_live_fragment() -> None:
-    """Streamlit fragment handling auto-refreshing dashboard visualization components."""
-    pass
-
-
-def main() -> None:
-    """Entry point to initialize and assemble the AI-WAF Streamlit dashboard."""
-    pass
-
-
-if __name__ == "__main__":
-    main()

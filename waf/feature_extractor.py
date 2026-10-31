@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import math
 from typing import List, Set
+from collections import Counter
 import numpy as np
 
 from waf.models import RequestContext
@@ -62,7 +63,7 @@ SQL_KEYWORDS: frozenset[str] = frozenset({
 })
 
 # String of special characters indicative of injection, escaping, or script injection
-SPECIAL_CHARS: str = r"""'"<>;:()[]{}=+\-/*%&|^~`$@#!?\"""
+SPECIAL_CHARS: str = r"""'"<>;:()[]{}=+\-/*%&|^~`$@#!?"""
 
 
 def _shannon_entropy(text: str) -> float:
@@ -77,7 +78,15 @@ def _shannon_entropy(text: str) -> float:
     Returns:
         Shannon entropy value in bits (0.0 for empty strings).
     """
-    pass
+    if not text:
+        return 0.0
+    entropy = 0.0
+    length = len(text)
+    counts = Counter(text)
+    for count in counts.values():
+        prob = count / length
+        entropy -= prob * math.log2(prob)
+    return entropy
 
 
 def extract_text_for_tfidf(ctx: RequestContext) -> str:
@@ -92,7 +101,32 @@ def extract_text_for_tfidf(ctx: RequestContext) -> str:
     Returns:
         Concatenated text representation of the request.
     """
-    pass
+    parts = []
+    if hasattr(ctx, "path") and ctx.path:
+        parts.append(str(ctx.path))
+
+    q_params = getattr(ctx, "normalized_query", None)
+    if q_params is None:
+        q_params = getattr(ctx, "query_params", {})
+
+    if isinstance(q_params, dict):
+        for k, v in q_params.items():
+            parts.append(f"{k}={v}")
+    elif isinstance(q_params, str):
+        parts.append(q_params)
+
+    body = getattr(ctx, "normalized_body", None)
+    if body is None:
+        body = getattr(ctx, "body", "")
+    if isinstance(body, bytes):
+        try:
+            body = body.decode("utf-8", errors="ignore")
+        except Exception:
+            body = ""
+    if body:
+        parts.append(str(body))
+
+    return " ".join(parts)
 
 
 def extract(ctx: RequestContext) -> np.ndarray:
@@ -118,4 +152,61 @@ def extract(ctx: RequestContext) -> np.ndarray:
     Returns:
         1D numpy float array of shape (12,) containing feature values.
     """
-    pass
+    text = extract_text_for_tfidf(ctx)
+    length = len(text)
+
+    payload_length = float(length)
+    shannon_entropy = _shannon_entropy(text)
+
+    if length > 0:
+        special_count = sum(1 for c in text if c in SPECIAL_CHARS)
+        special_char_ratio = special_count / length
+        digit_count = sum(1 for c in text if c.isdigit())
+        digit_ratio = digit_count / length
+        upper_count = sum(1 for c in text if c.isupper())
+        uppercase_ratio = upper_count / length
+    else:
+        special_char_ratio = 0.0
+        digit_ratio = 0.0
+        uppercase_ratio = 0.0
+
+    text_lower = text.lower()
+    sql_keyword_count = float(sum(1 for kw in SQL_KEYWORDS if kw in text_lower))
+
+    xss_chars = {"<", ">", '"', "'"}
+    xss_char_count = float(sum(1 for c in text if c in xss_chars))
+
+    path = getattr(ctx, "path", "") or ""
+    path_depth = float(path.strip("/").count("/")) + (1.0 if path and path != "/" else 0.0) if path else 0.0
+
+    q_params = getattr(ctx, "normalized_query", None)
+    if q_params is None:
+        q_params = getattr(ctx, "query_params", {})
+    query_param_count = float(len(q_params)) if isinstance(q_params, (dict, list, set)) else 0.0
+
+    max_param_length = 0.0
+    if isinstance(q_params, dict):
+        for k, v in q_params.items():
+            max_param_length = max(max_param_length, float(len(str(k)) + len(str(v))))
+    elif isinstance(q_params, str):
+        max_param_length = float(len(q_params))
+
+    non_ascii_count = float(sum(1 for c in text if ord(c) > 127))
+    decode_iterations = float(getattr(ctx, "decode_iterations", 1.0))
+
+    features = [
+        payload_length,
+        shannon_entropy,
+        special_char_ratio,
+        digit_ratio,
+        uppercase_ratio,
+        sql_keyword_count,
+        xss_char_count,
+        path_depth,
+        query_param_count,
+        max_param_length,
+        non_ascii_count,
+        decode_iterations,
+    ]
+
+    return np.array(features, dtype=float)

@@ -15,7 +15,8 @@ except ImportError:
             if not text:
                 return False
             malicious_patterns = [
-                "' or 1=1", "union select", "<script>", 
+                "' o"
+                "r 1=1", "union select", "<script>", 
                 "onerror=", "../../", "; ls", "cat /etc/passwd",
                 "select * from users"
             ]

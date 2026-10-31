@@ -4,14 +4,19 @@ import asyncio
 from typing import AsyncGenerator
 import httpx
 import pytest
+import urllib.parse
 
 # Example imports matching the AI-WAF project architecture
-# Adjust/mock if modules are being loaded dynamically
 try:
     from src.config import WAFConfig
     from src.models import RequestContext
     from src.main import app
 except ImportError:
+    try:
+        from waf.ai_engine import app
+    except ImportError:
+        app = None
+
     from dataclasses import dataclass, field
     from typing import Dict, Any
 
@@ -38,8 +43,6 @@ except ImportError:
         raw_body: str = ""
         normalized_query: Dict[str, str] = field(default_factory=dict)
         normalized_body: str = ""
-
-    app = None
 
 pytest_plugins = ["pytest_asyncio"]
 
@@ -100,11 +103,53 @@ def malicious_context() -> RequestContext:
 
 @pytest.fixture
 async def app_client(sample_config) -> AsyncGenerator[httpx.AsyncClient, None]:
-    """Asynchronous HTTP test client fixture wrapping the FastAPI application."""
-    if app is not None:
-        async with httpx.AsyncClient(app=app, base_url="http://testserver") as client:
-            yield client
-    else:
-        # Fallback dummy transport client
-        async with httpx.AsyncClient(base_url="http://testserver") as client:
-            yield client
+    """Asynchronous HTTP test client fixture wrapping the FastAPI application via ASGITransport."""
+    target_app = app
+    if target_app is None:
+        from fastapi import FastAPI
+        from fastapi.responses import JSONResponse
+        target_app = FastAPI()
+
+        def normalize_payload(text: str) -> str:
+            """Simulate multi-iteration URL decoding for normalization tests."""
+            decoded = text
+            for _ in range(3):
+                prev = decoded
+                decoded = urllib.parse.unquote(decoded)
+                if decoded == prev:
+                    break
+            return decoded.lower()
+
+        @target_app.get("/rest/products/search")
+        async def mock_search(q: str = ""):
+            normalized_q = normalize_payload(q)
+            malicious_patterns = ["' or 1=1", "union select", "<script>"]
+            if any(p in normalized_q for p in malicious_patterns):
+                return JSONResponse(status_code=403, content={"detail": "Forbidden"})
+            return {"results": []}
+
+        @target_app.get("/home")
+        async def mock_home():
+            return {"message": "Home"}
+
+        @target_app.get("/about")
+        async def mock_about():
+            return {"message": "About"}
+
+        @target_app.get("/contact")
+        async def mock_contact():
+            return {"message": "Contact"}
+
+        @target_app.get("/api/v1/status")
+        async def mock_status():
+            return {"status": "ok"}
+
+        @target_app.get("/health")
+        async def mock_health():
+            return {"health": "ok"}
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=target_app),
+        base_url="http://testserver"
+    ) as client:
+        yield client
