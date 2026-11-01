@@ -215,12 +215,3 @@ Validate WAF protection against industry tools:
 
 ---
 
-## 👥 Team
-
-- Core Development Team (Placeholder)
-
----
-
-## 📄 License
-
-This project is licensed under the [MIT License](LICENSE).
