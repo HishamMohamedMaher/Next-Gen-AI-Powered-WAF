@@ -182,7 +182,7 @@ def insert_batch(events: List[WAFEvent]) -> None:
 
 
 def insert_alert(alert: Alert) -> None:
-    """Persist a new security alert record or upsert count and last_seen on duplicate."""
+    """Persist a new security alert record or upsert count, last_seen, and confidence on duplicate."""
     global _write_conn
     if not _write_conn:
         return
@@ -194,7 +194,8 @@ def insert_alert(alert: Alert) -> None:
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(id) DO UPDATE SET
         last_seen = excluded.last_seen,
-        count = alerts.count + 1;
+        count = excluded.count,
+        confidence = MAX(alerts.confidence, excluded.confidence);
     """
 
     cursor = _write_conn.cursor()
@@ -218,16 +219,17 @@ def insert_alert(alert: Alert) -> None:
     _write_conn.commit()
 
 
-def update_alert_status(alert_id: str, status: str) -> None:
-    """Update resolution status of a security alert."""
+def update_alert_status(alert_id: str, status: str) -> bool:
+    """Update resolution status of a security alert (e.g. 'acknowledged' or 'resolved')."""
     global _write_conn
     if not _write_conn:
-        return
+        return False
 
     query = "UPDATE alerts SET status = ? WHERE id = ?"
     cursor = _write_conn.cursor()
     cursor.execute(query, (status, alert_id))
     _write_conn.commit()
+    return cursor.rowcount > 0
 
 
 def get_blacklist_entries() -> List[Dict[str, Any]]:

@@ -9,9 +9,10 @@ from __future__ import annotations
 
 import logging
 import time
+import uuid
 from typing import Dict, Optional, Tuple, Union
 
-from waf.models import Action, Alert, AttackType, WAFEvent
+from waf.models import Action, Alert, AttackType, Layer, WAFEvent
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +37,19 @@ def _find_existing(
     Returns:
         The matching Alert instance if found within the time window, or None.
     """
-    pass
+    atk_str = attack_type.value if isinstance(attack_type, AttackType) else str(attack_type)
+    key = f"{ip}:{atk_str}"
+    
+    if key in _recent_alerts:
+        alert = _recent_alerts[key]
+        now = time.time()
+        if (now - alert.last_seen) <= window:
+            return alert
+        else:
+            # Expired alert in cache
+            del _recent_alerts[key]
+            
+    return None
 
 
 def _should_alert(event: WAFEvent) -> Tuple[bool, str]:
@@ -55,7 +68,31 @@ def _should_alert(event: WAFEvent) -> Tuple[bool, str]:
         A tuple of (should_create, severity) where should_create is a boolean and
         severity is a string ('critical', 'high', 'medium', 'low', 'info').
     """
-    pass
+    action_val = event.action.value if isinstance(event.action, Action) else str(event.action)
+    layer_val = event.layer.value if isinstance(event.layer, Layer) else str(event.layer)
+    
+    # 1. Confirmed Block Decisions
+    if action_val == Action.BLOCK.value:
+        if event.confidence >= 0.90 or layer_val in (Layer.BLACKLIST.value, Layer.SIGNATURE.value):
+            return True, "critical"
+        return True, "high"
+
+    # 2. Blacklist Triggers
+    if layer_val == Layer.BLACKLIST.value:
+        return True, "high"
+
+    # 3. Rate Limit Violations
+    if layer_val == Layer.RATE_LIMIT.value:
+        return True, "medium"
+
+    # 4. High AI Confidence Threats in Monitor Mode
+    if event.confidence >= 0.85:
+        return True, "high"
+    elif event.confidence >= 0.50 and action_val == Action.MONITOR.value:
+        return True, "medium"
+
+    # 5. Clean or Low-Risk Allowed Requests
+    return False, "info"
 
 
 def process(event: WAFEvent) -> Optional[Alert]:
@@ -75,4 +112,42 @@ def process(event: WAFEvent) -> Optional[Alert]:
     Returns:
         The created or updated Alert instance if an alert was generated, or None.
     """
-    pass
+    should_create, severity = _should_alert(event)
+    if not should_create:
+        return None
+
+    now = time.time()
+    ip = event.client_ip
+    attack_type_str = event.attack_type.value if isinstance(event.attack_type, AttackType) else str(event.attack_type)
+    
+    # Check for existing alert for deduplication
+    existing_alert = _find_existing(ip, attack_type_str)
+    
+    if existing_alert:
+        # Update existing alert counters
+        existing_alert.count += 1
+        existing_alert.last_seen = now
+        existing_alert.confidence = max(existing_alert.confidence, event.confidence)
+        return existing_alert
+
+    # Create a new Alert instance
+    new_alert = Alert(
+        id=str(uuid.uuid4()),
+        created_at=now,
+        last_seen=now,
+        severity=severity,
+        attack_type=attack_type_str,
+        client_ip=ip,
+        path=event.path,
+        payload_snippet=event.payload_snippet,
+        confidence=event.confidence,
+        count=1,
+        status="new",
+        rule_id=event.rule_id,
+    )
+
+    # Save to memory cache
+    cache_key = f"{ip}:{attack_type_str}"
+    _recent_alerts[cache_key] = new_alert
+
+    return new_alert
