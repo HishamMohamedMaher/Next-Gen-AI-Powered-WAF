@@ -101,7 +101,6 @@ def load_from_db() -> None:
                 _blacklist.add(ip_val)
                 _expiry[ip_val] = float(exp)
 
-            # تنظيف السجلات منتهية الصلاحية من قاعدة البيانات
             conn.execute("DELETE FROM blacklist WHERE expires_at <= ?", (now,))
             logger.info("Loaded %d active blacklist entries from database", len(_blacklist))
     except Exception as exc:
@@ -131,7 +130,6 @@ def is_blacklisted(ip: str) -> bool:
     now = time.time()
     expires_at = _expiry.get(ip)
     if expires_at is not None and now >= expires_at:
-        # انتهت مدة الحظر: إزالة تلقائية
         remove(ip)
         return False
 

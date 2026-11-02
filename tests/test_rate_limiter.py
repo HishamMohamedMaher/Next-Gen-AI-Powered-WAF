@@ -17,7 +17,6 @@ async def test_allows_within_limit():
     """Verify that requests under the allowed request rate limit pass through successfully."""
     _buckets.clear()
     ip = "192.168.1.10"
-    # الطلبات المتتالية تحت سقف السعة تمر بنجاح
     for _ in range(5):
         assert check(ip, is_login=False) is True
 
@@ -29,11 +28,9 @@ async def test_blocks_over_limit():
     ip = "192.168.1.20"
     capacity, _ = _get_limits(is_login=False)
 
-    # استهلاك سعة التوكنز بالكامل
     for _ in range(int(capacity)):
         check(ip, is_login=False)
 
-    # الطلب الزائد عن السعة يجب أن يُحظر فوراً
     assert check(ip, is_login=False) is False
 
 
@@ -44,11 +41,9 @@ async def test_refill_over_time():
     ip = "192.168.1.30"
     check(ip, is_login=False)
 
-    # تفريغ رصيد التوكنز تماماً
     _buckets[ip].tokens = 0.0
     assert check(ip, is_login=False) is False
 
-    # محاكاة مرور ثانيتين ونصف (بمعدل 1 توكن/ثانية يُشحن الرصيد مجدداً)
     _buckets[ip].last_refill = time.time() - 2.5
     assert check(ip, is_login=False) is True
 
@@ -63,11 +58,9 @@ async def test_login_path_stricter_limit():
     ip = "192.168.1.40"
     login_capacity, _ = _get_limits(is_login=True)
 
-    # سقف تسجيل الدخول المشدد هو 5 طلبات فقط
     for _ in range(int(login_capacity)):
         assert check(ip, is_login=True) is True
 
-    # الطلب السادس يُحظر فوراً لحماية مسار المصادقة
     assert check(ip, is_login=True) is False
 
 
@@ -81,7 +74,6 @@ async def test_cleanup_removes_old_buckets():
     check(active_ip)
     check(stale_ip)
 
-    # جعل الـ stale_ip خاملاً منذ أكثر من 10 دقائق (700 ثانية)
     _buckets[stale_ip].last_refill = time.time() - 700.0
 
     purged = cleanup()
@@ -101,6 +93,5 @@ async def test_different_ips_independent():
     for _ in range(int(capacity)):
         check(ip1)
 
-    # نفاد رصيد IP1 لا يؤثر إطلاقاً على رصيد IP2 المستقل
     assert check(ip1) is False
-    assert check(ip2) is True
+    assert check(ip2) is True 

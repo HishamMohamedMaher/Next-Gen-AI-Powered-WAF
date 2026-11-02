@@ -112,12 +112,10 @@ def check(ip: str, is_login: bool = False) -> bool:
 
     bucket = _buckets[bucket_key]
 
-    # حساب التوكنز الجديدة بناءً على الوقت المنقضي
     elapsed = max(0.0, now - bucket.last_refill)
     bucket.tokens = min(capacity, bucket.tokens + (elapsed * refill_rate))
     bucket.last_refill = now
 
-    # خصم توكن لو متاح
     if bucket.tokens >= 1.0:
         bucket.tokens -= 1.0
         return True
