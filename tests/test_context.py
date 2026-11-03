@@ -1,6 +1,7 @@
 """Tests for build_context (RequestContext builder)."""
 
 import pytest
+from fastapi import HTTPException
 from starlette.requests import Request
 
 from waf.context import build_context
@@ -98,9 +99,10 @@ async def test_body_size_limit(monkeypatch):
         headers={"content-type": "application/octet-stream"},
         body=b"A" * 150,
     )
-    ctx = await build_context(req)
-
-    assert len(ctx.body_raw) <= 100
+    # نتوقع رمي HTTPException برمز 413 لتجاوز الحجم المسموح
+    with pytest.raises(HTTPException) as exc_info:
+        await build_context(req)
+    assert exc_info.value.status_code == 413
 
 
 @pytest.mark.asyncio
