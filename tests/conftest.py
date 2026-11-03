@@ -1,45 +1,48 @@
 """Pytest test configuration and shared fixtures for AI-WAF."""
 
 import asyncio
-from typing import AsyncGenerator
+from typing import AsyncGenerator, Dict, Any
+from dataclasses import dataclass, field
 import httpx
 import pytest
 
-# Example imports matching the AI-WAF project architecture
-# Adjust/mock if modules are being loaded dynamically
+# Fallback definitions and safe imports to keep static analysis clean
+@dataclass
+class WAFConfig:
+    """Fallback mock WAFConfig dataclass for tests."""
+    backend_url: str = "http://127.0.0.1:3000"
+    max_body_size: int = 1048576
+    paranoia_level: int = 1
+    rate_limit_enabled: bool = True
+    ai_detection_enabled: bool = True
+    signature_detection_enabled: bool = True
+    fail_open: bool = True
+
+@dataclass
+class RequestContext:
+    """Fallback mock RequestContext dataclass for tests."""
+    method: str = "GET"
+    path: str = "/"
+    query_params: Dict[str, str] = field(default_factory=dict)
+    headers: Dict[str, str] = field(default_factory=dict)
+    client_ip: str = "127.0.0.1"
+    body: bytes = b""
+    raw_body: str = ""
+    normalized_query: Dict[str, str] = field(default_factory=dict)
+    normalized_body: str = ""
+
+app = None
+
+# Attempt to load actual project modules if available
 try:
-    from src.config import WAFConfig
-    from src.models import RequestContext
-    from src.main import app
+    from src.config import WAFConfig as _WAFConfig
+    from src.models import RequestContext as _RequestContext
+    from src.main import app as _app
+    WAFConfig = _WAFConfig
+    RequestContext = _RequestContext
+    app = _app
 except ImportError:
-    from dataclasses import dataclass, field
-    from typing import Dict, Any
-
-    @dataclass
-    class WAFConfig:
-        """Fallback mock WAFConfig dataclass for tests."""
-        backend_url: str = "http://127.0.0.1:3000"
-        max_body_size: int = 1048576
-        paranoia_level: int = 1
-        rate_limit_enabled: bool = True
-        ai_detection_enabled: bool = True
-        signature_detection_enabled: bool = True
-        fail_open: bool = True
-
-    @dataclass
-    class RequestContext:
-        """Fallback mock RequestContext dataclass for tests."""
-        method: str = "GET"
-        path: str = "/"
-        query_params: Dict[str, str] = field(default_factory=dict)
-        headers: Dict[str, str] = field(default_factory=dict)
-        client_ip: str = "127.0.0.1"
-        body: bytes = b""
-        raw_body: str = ""
-        normalized_query: Dict[str, str] = field(default_factory=dict)
-        normalized_body: str = ""
-
-    app = None
+    pass
 
 pytest_plugins = ["pytest_asyncio"]
 
