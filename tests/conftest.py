@@ -35,9 +35,9 @@ app = None
 
 # Attempt to load actual project modules if available
 try:
-    from src.config import WAFConfig as _WAFConfig
-    from src.models import RequestContext as _RequestContext
-    from src.main import app as _app
+    from src.config import WAFConfig as _WAFConfig  # type: ignore
+    from src.models import RequestContext as _RequestContext  # type: ignore
+    from src.main import app as _app  # type: ignore
     WAFConfig = _WAFConfig
     RequestContext = _RequestContext
     app = _app
