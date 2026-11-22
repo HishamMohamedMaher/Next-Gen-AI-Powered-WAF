@@ -1,84 +1,93 @@
-"""GeoIP enrichment module for AI-WAF.
-
-Enriches incoming security events with geographical location data (country,
-latitude, and longitude) using the MaxMind GeoLite2 City database.
-"""
+"""Enrich WAF events with data from a local City database in MMDB format."""
 
 from __future__ import annotations
 
+import ipaddress
 import logging
+from pathlib import Path
+from threading import Lock
 from typing import Optional
 
 try:
     import geoip2.database
+    import geoip2.errors
+    from maxminddb.errors import InvalidDatabaseError
 except ImportError:
     geoip2 = None  # type: ignore
 
 from waf.models import WAFEvent
+from waf.threat_intel import _is_private
 
 logger = logging.getLogger(__name__)
-
-# Global MaxMind database reader instance
 _reader: Optional[geoip2.database.Reader] = None
+_reader_lock = Lock()
 
 
 def init(db_path: str = "data/GeoLite2-City.mmdb") -> None:
-    """Initialize the global GeoIP reader instance with the MMDB file.
+    """Open a City database, preserving any reader already working if open fails."""
+    if geoip2 is None:
+        logger.warning('GeoIP enrichment unavailable: geoip2 is not installed')
+        return
+    path = Path(db_path)
+    if not path.is_file():
+        logger.info('GeoIP enrichment database unavailable at %s', path)
+        return
+    reader = None
+    try:
+        reader = geoip2.database.Reader(str(path))
+        # Match Reader.city() compatibility, including DB-IP City databases.
+        if 'City' not in reader.metadata().database_type:
+            raise ValueError('Expected a City database in MMDB format')
+    except (OSError, ValueError, InvalidDatabaseError) as exc:
+        if reader is not None:
+            reader.close()
+        logger.warning('GeoIP reader unavailable: %s', type(exc).__name__)
+        return
 
-    Args:
-        db_path: File system path to the GeoLite2-City database file.
-    """
-    from pathlib import Path
-    import importlib
-    if geoip2 is None:raise RuntimeError('geoip2 is not installed')
-    p=Path(db_path)
-    if not p.is_file():raise FileNotFoundError(p)
-    new_reader=geoip2.database.Reader(str(p))
     global _reader
-    old_reader=_reader
-    _reader=new_reader
-    if old_reader is not None:old_reader.close()
-    return None
+    with _reader_lock:
+        previous = _reader
+        _reader = reader
+        if previous is not None:
+            previous.close()
 
 
 def close() -> None:
-    """Safely close and release resources held by the global GeoIP reader instance."""
+    """Release the active GeoIP reader."""
     global _reader
-    existing=_reader
-    _reader=None
-    if existing is not None:existing.close()
-    return None
+    with _reader_lock:
+        if _reader is not None:
+            reader, _reader = _reader, None
+            reader.close()
 
 
 def enrich(event: WAFEvent) -> WAFEvent:
-    """Enrich a WAFEvent with geographic metadata based on client IP.
-
-    Looks up the client IP address in the GeoIP database to resolve country
-    code/name, latitude, and longitude. Updates the relevant fields on the event
-    object. If lookup fails or the reader is uninitialized, returns the event unchanged.
-
-    Args:
-        event: The incoming WAFEvent to enrich.
-
-    Returns:
-        The WAFEvent instance with geographical fields populated if resolution succeeded.
-    """
-    import ipaddress
-    if not isinstance(event,WAFEvent):raise TypeError('Expected WAFEvent')
-    if _reader is None:return event
+    """Populate geographic fields on the supplied WAF event when available."""
+    if not isinstance(event, WAFEvent):
+        raise TypeError('Expected WAFEvent')
     try:
-        address=ipaddress.ip_address(event.client_ip)
-    except ValueError:return event
-    if not address.is_global:return event
-    try:
-        record=_reader.city(str(address))
-        country=record.country.iso_code or record.country.name
-        lat=record.location.latitude
-        lon=record.location.longitude
-        if country:event.country=str(country)
-        if lat is not None and lon is not None:
-            event.latitude=float(lat)
-            event.longitude=float(lon)
-    except Exception as exc:
-        logger.warning('GeoIP lookup unavailable: %s',type(exc).__name__)
+        if _is_private(event.client_ip):
+            return event
+        address = ipaddress.ip_address(event.client_ip)
+    except ValueError:
+        return event
+    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped is not None:
+        address = address.ipv4_mapped
+    with _reader_lock:
+        if _reader is None:
+            return event
+        try:
+            record = _reader.city(str(address))
+        except geoip2.errors.AddressNotFoundError:
+            return event
+        except (OSError, ValueError, InvalidDatabaseError, geoip2.errors.GeoIP2Error) as exc:
+            logger.warning('GeoIP lookup unavailable: %s', type(exc).__name__)
+            return event
+    country = record.country.iso_code or record.country.name
+    if country:
+        event.country = country
+    latitude, longitude = record.location.latitude, record.location.longitude
+    if latitude is not None and longitude is not None:
+        event.latitude = float(latitude)
+        event.longitude = float(longitude)
     return event
