@@ -91,7 +91,7 @@ def test_geoip_enrich_reopen_and_close(tmp_path, monkeypatch):
     second = Mock()
     invalid = Mock()
     first.metadata.return_value.database_type = "GeoLite2-City"
-    second.metadata.return_value.database_type = "GeoIP2-City"
+    second.metadata.return_value.database_type = "DBIP-City-Lite"
     invalid.metadata.return_value.database_type = "GeoIP2-Country"
     first.city.return_value = SimpleNamespace(
         country=SimpleNamespace(iso_code="EG", name="Egypt"),

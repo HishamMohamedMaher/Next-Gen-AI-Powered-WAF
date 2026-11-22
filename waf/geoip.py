@@ -1,4 +1,4 @@
-"""Enrich WAF events with data from a local MaxMind City database."""
+"""Enrich WAF events with data from a local City database in MMDB format."""
 
 from __future__ import annotations
 
@@ -35,8 +35,9 @@ def init(db_path: str = "data/GeoLite2-City.mmdb") -> None:
     reader = None
     try:
         reader = geoip2.database.Reader(str(path))
-        if reader.metadata().database_type not in {'GeoIP2-City', 'GeoLite2-City'}:
-            raise ValueError('Expected a MaxMind City database')
+        # Match Reader.city() compatibility, including DB-IP City databases.
+        if 'City' not in reader.metadata().database_type:
+            raise ValueError('Expected a City database in MMDB format')
     except (OSError, ValueError, InvalidDatabaseError) as exc:
         if reader is not None:
             reader.close()
