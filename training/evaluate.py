@@ -7,6 +7,8 @@ generating confusion matrix plots, reliability/calibration curves, and rendering
 from __future__ import annotations
 
 import argparse
+import json
+from time import perf_counter_ns
 import logging
 from pathlib import Path
 from typing import Any, Dict, Union
@@ -14,7 +16,10 @@ from typing import Any, Dict, Union
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from sklearn.metrics import classification_report, confusion_matrix, f1_score
+from sklearn.metrics import (
+    ConfusionMatrixDisplay, RocCurveDisplay, accuracy_score, classification_report,
+    confusion_matrix, f1_score, precision_score, recall_score, roc_auc_score,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -28,13 +33,14 @@ def load_test_data(splits_dir: Union[str, Path]) -> pd.DataFrame:
     Returns:
         pd.DataFrame: DataFrame containing test payloads and ground-truth labels.
     """
-    import json, hashlib
+    import hashlib
     root=Path(splits_dir)
     manifest_path=root/'canonical_manifest.json'
     if not manifest_path.is_file():
         raise RuntimeError('FINAL_TEST_LOCKED: missing verified canonical manifest')
     manifest=json.loads(manifest_path.read_text(encoding='utf-8'))
-    if not all(manifest.get(flag) is True for flag in ('training_ready','normalization_applied','canonical_tfidf_generated','final_evaluation_authorized')):
+    if not all(manifest.get(flag) is True for flag in ('training_ready','normalization_applied','normalization_approved',
+                                                 'canonical_tfidf_generated','final_evaluation_authorized')):
         raise RuntimeError('FINAL_TEST_LOCKED: final canonical evaluation not authorized')
     if (manifest.get('normalizer')!='waf.normalizer.normalize_context' or
         manifest.get('feature_extractor')!='waf.feature_extractor.extract_text_for_tfidf'):
@@ -55,6 +61,8 @@ def load_test_data(splits_dir: Union[str, Path]) -> pd.DataFrame:
     if not df['request_group_sha256'].str.fullmatch(r'[0-9a-fA-F]{64}').all():raise ValueError('Invalid test group hash')
     if df['request_group_sha256'].duplicated().any():raise ValueError('Duplicate test groups')
     if df['payload_tfidf'].str.strip().eq('').any():raise ValueError('Empty canonical test text')
+    if df['payload_tfidf'].duplicated().any():
+        raise ValueError('Duplicate canonical test text')
     df['payload']=df['payload_tfidf']
     df['label']=df['label'].astype('int8')
     return df
@@ -94,8 +102,16 @@ def load_models(models_dir: Union[str, Path]) -> Dict[str, Any]:
     objects={}
     for name,key in [('vectorizer.pkl','vectorizer'),('model.pkl','model'),('calibrator.pkl','calibrator')]:
         with (root/name).open('rb') as f:objects[key]=pickle.load(f)
-    if not hasattr(objects['vectorizer'],'transform') or not hasattr(objects['calibrator'],'predict_proba'):
-        raise TypeError('Invalid trained artifact interface')
+    interfaces = {'vectorizer': 'transform', 'model': 'predict_proba', 'calibrator': 'predict_proba'}
+    for name, method in interfaces.items():
+        if not callable(getattr(objects[name], method, None)):
+            raise TypeError(f'Invalid trained artifact interface: {name}')
+    vocabulary = getattr(objects['vectorizer'], 'vocabulary_', None)
+    if not vocabulary or any(
+        getattr(objects[name], 'n_features_in_', None) != len(vocabulary)
+        for name in ('model', 'calibrator')
+    ):
+        raise ValueError('Model and calibrator feature counts must match the fitted vectorizer')
     return objects
 
 
@@ -118,17 +134,25 @@ def evaluate_model(
     Returns:
         Dict[str, Any]: Summary dictionary containing evaluation metric values.
     """
-    from sklearn.metrics import accuracy_score,precision_score,recall_score,roc_auc_score
+    from training.calibrate import evaluate_calibration
     if not isinstance(model_name,str) or not model_name.strip():raise ValueError('Invalid model name')
     y=np.asarray(y_true); p=np.asarray(y_pred); prob=np.asarray(y_proba,dtype=float)
     if any(a.ndim!=1 for a in (y,p,prob)) or len(y)==0 or len(y)!=len(p) or len(y)!=len(prob):
         raise ValueError('Labels, predictions, probabilities must be equal-length 1D arrays')
     if not np.isin(y,[0,1]).all() or not np.isin(p,[0,1]).all():raise ValueError('Binary labels required')
     if not np.isfinite(prob).all() or (prob<0).any() or (prob>1).any():raise ValueError('Invalid probabilities')
-    cm=confusion_matrix(y,p,labels=[0,1])
+    cm = confusion_matrix(y, p, labels=[0, 1])
+    tn, fp, fn, tp = cm.ravel()
+    calibration = evaluate_calibration(y, prob)
     return {
         'model_name':model_name,
         'accuracy':float(accuracy_score(y,p)),
+        'precision': float(precision_score(y, p, zero_division=0)),
+        'recall': float(recall_score(y, p, zero_division=0)),
+        'f1': float(f1_score(y, p, zero_division=0)),
+        'false_positive_rate': float(fp / (tn + fp)) if tn + fp else None,
+        'false_negative_rate': float(fn / (fn + tp)) if fn + tp else None,
+        'calibration': calibration,
         'precision_macro':float(precision_score(y,p,average='macro',zero_division=0)),
         'recall_macro':float(recall_score(y,p,average='macro',zero_division=0)),
         'f1_macro':float(f1_score(y,p,average='macro',zero_division=0)),
@@ -153,28 +177,47 @@ def plot_confusion_matrix(
         output_path: Destination file path for the rendered image.
         labels: Optional class label names for axis display.
     """
-    import tempfile
     true=np.asarray(y_true);pred=np.asarray(y_pred)
     if true.ndim!=1 or pred.ndim!=1 or len(true)==0 or len(true)!=len(pred):raise ValueError('Invalid confusion matrix inputs')
     if not np.isin(true,[0,1]).all() or not np.isin(pred,[0,1]).all():raise ValueError('Binary labels required')
     if labels is not None and (len(labels)!=2 or not all(isinstance(v,str) for v in labels)):
         raise ValueError('Expected two label names')
     display_names=labels if labels is not None else ['Benign','Attack']
-    p=Path(output_path)
-    if p.suffix.lower()!='.png':raise ValueError('PNG required')
-    if p.exists() or p.is_symlink():raise FileExistsError(p)
-    cm=confusion_matrix(true,pred,labels=[0,1]);fig,ax=plt.subplots(figsize=(5.5,4.5))
+    matrix = confusion_matrix(true, pred, labels=[0, 1])
+    _plot_confusion_counts(matrix, display_names, output_path, 'Confusion Matrix')
+
+
+def _plot_confusion_counts(matrix, labels, output_path, title):
+    fig, ax = plt.subplots(figsize=(6, 4.8))
     try:
-        ax.imshow(cm)
-        ax.set_xticks([0,1],labels=display_names)
-        ax.set_yticks([0,1],labels=display_names)
-        ax.set(xlabel='Predicted',ylabel='Actual',title='Confusion Matrix')
-        for i in (0,1):
-            for j in (0,1):ax.text(j,i,str(cm[i,j]),ha='center',va='center')
-        fig.tight_layout();p.parent.mkdir(parents=True,exist_ok=True)
-        with p.open('xb') as f:fig.savefig(f,format='png',dpi=150)
-    finally:plt.close(fig)
-    return None
+        ConfusionMatrixDisplay(matrix, display_labels=labels).plot(
+            ax=ax, cmap='Blues', values_format='d', colorbar=False
+        )
+        ax.set(title=title)
+        _save_plot(fig, output_path)
+    finally:
+        plt.close(fig)
+
+
+def _save_plot(figure, output_path):
+    path = Path(output_path)
+    if path.suffix.lower() != '.png':
+        raise ValueError('PNG required')
+    figure.tight_layout()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open('xb') as handle:
+        figure.savefig(handle, format='png', dpi=150)
+
+
+def _plot_roc_curve(labels, probabilities, output_path):
+    fig, ax = plt.subplots(figsize=(5.5, 4.5))
+    try:
+        RocCurveDisplay.from_predictions(labels, probabilities, name='Calibrated LR', ax=ax)
+        ax.plot([0, 1], [0, 1], linestyle='--', color='0.5')
+        ax.set(title='Receiver Operating Characteristic')
+        _save_plot(fig, output_path)
+    finally:
+        plt.close(fig)
 
 
 def plot_calibration_curve(
@@ -202,7 +245,6 @@ def generate_report(results: Dict[str, Any], output_path: Union[str, Path]) -> N
         results: Dictionary containing metric summaries for evaluated models.
         output_path: Destination file path for the generated markdown report.
     """
-    import json
     if not isinstance(results,dict) or not results:raise ValueError('Expected nonempty results dictionary')
     p=Path(output_path)
     if p.suffix.lower()!='.md':raise ValueError('Expected Markdown output')
@@ -241,6 +283,10 @@ def main() -> None:
         default="reports",
         help="Directory to save evaluation reports and plots",
     )
+    parser.add_argument(
+        "--validation-diagnostics", action="store_true",
+        help="Evaluate the calibration partition without reading the held-out test split",
+    )
     args = parser.parse_args()
 
     models = load_models(args.models_dir)
@@ -271,9 +317,25 @@ def main() -> None:
         )
     threshold = float(threshold)
 
-    # load_test_data enforces the final_evaluation_authorized manifest gate
-    # before it opens the held-out split.
-    test_df = load_test_data(args.splits_dir)
+    from training.train_lr import load_splits
+
+    train_df, val_df = load_splits(args.splits_dir)
+    if args.validation_diagnostics:
+        partition = val_df
+        evaluation_kind = 'calibration_validation_diagnostics'
+    else:
+        partition = load_test_data(args.splits_dir)
+        for column in ('request_group_sha256', 'payload_tfidf'):
+            development_values = set(train_df[column]) | set(val_df[column])
+            if development_values.intersection(partition[column]):
+                raise ValueError(f'DATA_LEAKAGE: Held-out split overlaps development data in {column}')
+        evaluation_kind = 'independent_final_test'
+
+    results = _evaluate_partition(models, partition, threshold, Path(args.output_dir), evaluation_kind)
+    print(json.dumps(results, indent=2, sort_keys=True))
+
+
+def _evaluate_partition(models, partition, threshold, output_dir, evaluation_kind):
     vectorizer = models["vectorizer"]
     calibrator = models["calibrator"]
     if not callable(getattr(vectorizer, "transform", None)):
@@ -286,9 +348,9 @@ def main() -> None:
     if classes.shape != (2,) or set(classes.tolist()) != {0, 1} or len(positive_class) != 1:
         raise ValueError("Calibrator must expose fitted binary classes [0, 1]")
 
-    X_test = vectorizer.transform(test_df["payload"])
-    probabilities = np.asarray(calibrator.predict_proba(X_test), dtype=float)
-    if probabilities.shape != (len(test_df), 2):
+    features = vectorizer.transform(partition["payload"])
+    probabilities = np.asarray(calibrator.predict_proba(features), dtype=float)
+    if probabilities.shape != (len(partition), 2):
         raise ValueError("Calibrator returned an invalid probability matrix")
     if (
         not np.isfinite(probabilities).all()
@@ -298,7 +360,7 @@ def main() -> None:
     ):
         raise ValueError("Calibrator returned invalid class probabilities")
 
-    y_true = test_df["label"].to_numpy(dtype=int)
+    y_true = partition["label"].to_numpy(dtype=int)
     y_proba = probabilities[:, positive_class[0]]
     y_pred = (y_proba >= threshold).astype(int)
 
@@ -308,28 +370,36 @@ def main() -> None:
         y_pred,
         y_proba,
     )
-    from training.calibrate import evaluate_calibration
     results["threshold"] = threshold
-    results["calibration"] = evaluate_calibration(y_true, y_proba)
+    results["evaluation_kind"] = evaluation_kind
+    results["inference_latency"] = _measure_inference_latency(
+        vectorizer, calibrator, partition["payload"]
+    )
 
-    output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    # Evaluation runs in CLI/headless environments; neither plot is displayed.
     plt.switch_backend("Agg")
-    plot_confusion_matrix(
-        y_true,
-        y_pred,
-        output_dir / "confusion_matrix.png",
-        labels=["Benign", "Attack"],
-    )
-    plot_calibration_curve(
-        y_true,
-        y_proba,
-        output_dir / "reliability_diagram.png",
-    )
+    plot_confusion_matrix(y_true, y_pred, output_dir / "confusion_matrix.png")
+    plot_calibration_curve(y_true, y_proba, output_dir / "reliability_diagram.png")
+    _plot_roc_curve(y_true, y_proba, output_dir / "roc_curve.png")
+    generate_report({results["model_name"]: results}, output_dir / "evaluation.md")
+    return results
 
-    import json
-    print(json.dumps(results, indent=2, sort_keys=True))
+
+def _measure_inference_latency(vectorizer, calibrator, texts):
+    """Time single-row TF-IDF and calibrated prediction after one warmup."""
+    sample = texts.iloc[np.linspace(0, len(texts) - 1, min(1000, len(texts)), dtype=int)]
+    calibrator.predict_proba(vectorizer.transform([sample.iloc[0]]))
+    latencies = []
+    for text in sample:
+        start = perf_counter_ns()
+        calibrator.predict_proba(vectorizer.transform([text]))
+        latencies.append((perf_counter_ns() - start) / 1_000_000)
+    return {
+        "scope": "single canonical text: TF-IDF transform and calibrated prediction",
+        "samples": len(latencies),
+        "median_ms": float(np.median(latencies)),
+        "p95_ms": float(np.percentile(latencies, 95)),
+    }
 
 
 if __name__ == "__main__":

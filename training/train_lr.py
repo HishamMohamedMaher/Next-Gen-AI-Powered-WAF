@@ -67,6 +67,7 @@ def load_splits(splits_dir: Union[str, Path]) -> Tuple[pd.DataFrame, pd.DataFram
     required_flags = (
         "training_ready",
         "normalization_applied",
+        "normalization_approved",
         "canonical_tfidf_generated",
     )
 
@@ -165,6 +166,9 @@ def load_splits(splits_dir: Union[str, Path]) -> Tuple[pd.DataFrame, pd.DataFram
             raise ValueError(
                 f"Duplicate raw request groups: {name}"
             )
+
+        if df["payload_tfidf"].duplicated().any():
+            raise ValueError(f"Duplicate canonical text: {name}")
 
         if df["payload_tfidf"].str.strip().eq("").any():
             raise ValueError(
@@ -346,11 +350,13 @@ def calibrate(model: LogisticRegression, X_val: Any, y_val: Any) -> CalibratedCl
     if set(labels.tolist()) != {0, 1}:
         raise ValueError("Both classes are required for calibration")
 
-    # FrozenEstimator keeps the already-trained model fixed.
-    # Fit only the sigmoid probability calibration on validation data.
+    # The frozen estimator ignores fit. Score the full validation partition
+    # once, without requiring the default five-fold stratification.
+    validation_indices = np.arange(n_samples)
     calibrator = CalibratedClassifierCV(
         estimator=FrozenEstimator(model),
-        method="sigmoid"
+        method="sigmoid",
+        cv=[(validation_indices[:0], validation_indices)],
     )
 
     calibrator.fit(X_val, labels.astype(int))

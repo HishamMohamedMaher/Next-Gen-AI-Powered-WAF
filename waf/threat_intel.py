@@ -8,37 +8,49 @@ filtering private network addresses.
 from __future__ import annotations
 
 import ipaddress
+import json
 import logging
 import os
-from typing import Any, Dict, List, Optional
+import sqlite3
+from typing import Any, Dict, Optional
+
+import httpx
+
+from waf import db
 
 logger = logging.getLogger(__name__)
 
 ABUSEIPDB_URL: str = "https://api.abuseipdb.com/api/v2/check"
 
-PRIVATE_RANGES: List[ipaddress.IPv4Network | ipaddress.IPv6Network] = [
-    ipaddress.ip_network("10.0.0.0/8"),
-    ipaddress.ip_network("172.16.0.0/12"),
-    ipaddress.ip_network("192.168.0.0/16"),
-    ipaddress.ip_network("127.0.0.0/8"),
-    ipaddress.ip_network("169.254.0.0/16"),
-    ipaddress.ip_network("::1/128"),
-    ipaddress.ip_network("fc00::/7"),
-    ipaddress.ip_network("fe80::/10"),
-]
-
-
 def _is_private(ip: str) -> bool:
-    """Check if the given IP address falls within private or loopback ranges.
+    """Return whether the address is unsuitable for public reputation lookups."""
+    address = ipaddress.ip_address(ip)
+    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped is not None:
+        address = address.ipv4_mapped
+    return (
+        not address.is_global or address.is_multicast or address.is_reserved
+        or (isinstance(address, ipaddress.IPv6Address) and address.is_site_local)
+    )
 
-    Args:
-        ip: The IPv4 or IPv6 string to validate.
 
-    Returns:
-        True if the IP is within a private/reserved subnet, False otherwise.
-    """
-    address=ipaddress.ip_address(ip)
-    return not address.is_global
+def _validate_result(ip: str, result: Any) -> bool:
+    if not isinstance(result, dict):
+        return False
+    address = result.get('ipAddress')
+    if not isinstance(address, str):
+        return False
+    try:
+        if ipaddress.ip_address(address) != ipaddress.ip_address(ip):
+            return False
+    except ValueError:
+        return False
+    score = result.get('abuseConfidenceScore')
+    if type(score) is not int or not 0 <= score <= 100:
+        return False
+    if result.get('isPublic', True) is not True:
+        return False
+    total = result.get('totalReports', 0)
+    return type(total) is int and total >= 0
 
 
 def _cache_get(ip: str) -> Optional[Dict[str, Any]]:
@@ -51,14 +63,14 @@ def _cache_get(ip: str) -> Optional[Dict[str, Any]]:
         A dictionary containing cached reputation data if available and fresh,
         or None if missing or expired.
     """
-    import json
-    from waf import db
-    record=db.get_abuseipdb_cache(ip,max_age_hours=24)
-    if not record:return None
+    record = db.get_abuseipdb_cache(ip, max_age_hours=24)
+    if record is None:
+        return None
     try:
-        result=json.loads(record['raw_response'])
-    except (ValueError,TypeError,KeyError):return None
-    return result if isinstance(result,dict) else None
+        result = json.loads(record['raw_response'])
+    except (ValueError, TypeError, KeyError):
+        return None
+    return result if _validate_result(ip, result) else None
 
 
 def _cache_set(ip: str, result: Dict[str, Any]) -> None:
@@ -68,14 +80,11 @@ def _cache_set(ip: str, result: Dict[str, Any]) -> None:
         ip: The target IP address.
         result: The lookup payload containing abuse score and metadata.
     """
-    import json
-    from waf import db
-    if not isinstance(result,dict):raise TypeError('Expected dictionary')
-    score=result.get('abuseConfidenceScore',0)
-    if isinstance(score,bool) or not isinstance(score,(int,float)) or not 0<=score<=100:
-        raise ValueError('Invalid abuse confidence score')
-    db.cache_abuseipdb(ip,int(score),json.dumps(result,ensure_ascii=False))
-    return None
+    if not isinstance(result, dict):
+        raise TypeError('Expected dictionary')
+    if not _validate_result(ip, result):
+        raise ValueError('Invalid reputation response')
+    db.cache_abuseipdb(ip, result['abuseConfidenceScore'], json.dumps(result, ensure_ascii=False))
 
 
 def lookup(ip: str) -> Optional[Dict[str, Any]]:
@@ -92,29 +101,46 @@ def lookup(ip: str) -> Optional[Dict[str, Any]]:
         A dictionary containing threat details (e.g., abuseConfidenceScore,
         countryCode, usageType, totalReports), or None for private IPs or failed queries.
     """
-    import json, urllib.request, urllib.parse
-    try:
-        if _is_private(ip):return None
-    except ValueError:return None
-    try:
-        result=_cache_get(ip)
-        if result is not None:return result
-    except Exception as exc:
-        logger.warning('Threat cache read failed: %s',type(exc).__name__)
-    api_key=os.environ.get('ABUSEIPDB_API_KEY','').strip()
-    if not api_key:return None
-    url=ABUSEIPDB_URL+'?'+urllib.parse.urlencode({'ipAddress':ip,'maxAgeInDays':90})
-    request=urllib.request.Request(url,headers={'Key':api_key,'Accept':'application/json'})
-    try:
-        with urllib.request.urlopen(request,timeout=2.0) as response:
-            raw=response.read(1024*1024)
-        envelope=json.loads(raw)
-        result=envelope.get('data') if isinstance(envelope,dict) else None
-        if not isinstance(result,dict):return None
-        if result.get('ipAddress')!=ip:return None
-        try:_cache_set(ip,result)
-        except Exception as exc:logger.warning('Threat cache write failed: %s',type(exc).__name__)
-        return result
-    except Exception as exc:
-        logger.warning('AbuseIPDB lookup failed: %s',type(exc).__name__)
+    if not isinstance(ip, str) or '%' in ip:
         return None
+    try:
+        if _is_private(ip):
+            return None
+        address = ipaddress.ip_address(ip)
+    except ValueError:
+        return None
+    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped is not None:
+        address = address.ipv4_mapped
+    ip = str(address)
+
+    try:
+        result = _cache_get(ip)
+        if result is not None:
+            return result
+    except (OSError, ValueError, sqlite3.Error) as exc:
+        logger.warning('Threat cache read failed: %s', type(exc).__name__)
+
+    api_key = os.environ.get('ABUSEIPDB_API_KEY', '').strip()
+    if not api_key:
+        return None
+    try:
+        response = httpx.get(
+            ABUSEIPDB_URL,
+            params={'ipAddress': ip, 'maxAgeInDays': 90},
+            headers={'Key': api_key, 'Accept': 'application/json'},
+            timeout=2.0,
+            follow_redirects=False,
+        )
+        response.raise_for_status()
+        envelope = response.json()
+    except (httpx.HTTPError, ValueError) as exc:
+        logger.warning('AbuseIPDB lookup failed: %s', type(exc).__name__)
+        return None
+    result = envelope.get('data') if isinstance(envelope, dict) else None
+    if not _validate_result(ip, result):
+        return None
+    try:
+        _cache_set(ip, result)
+    except (OSError, ValueError, sqlite3.Error) as exc:
+        logger.warning('Threat cache write failed: %s', type(exc).__name__)
+    return result
